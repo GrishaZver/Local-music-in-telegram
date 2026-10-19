@@ -476,7 +476,7 @@ audio.onloadedmetadata = () => {   // длительность для стары
   updatePos();
 };
 audio.onended = () => { if (ytMode) { if (S.repeat === 2) { audio.currentTime = 0; audio.play().catch(() => {}); } else ytNextAutomatic(); return; } if (S.repeat === 2) { audio.currentTime = 0; audio.play(); } else step(1, true); };
-audio.onerror = () => { if (ytMode) { toast('Поток недоступен, пробую следующий'); setTimeout(ytNextAutomatic, 500); return; } if (S.cur != null) { toast('Файл не открывается — пропускаю'); setTimeout(() => step(1, true), 600); } };
+audio.onerror = () => { if (ytMode) { toast('Поток недоступен'); if(S.wave) { ytFailedSkips++; if(ytFailedSkips>=Math.max(3,ytQ.length)) { S.wave=false; save2(); updModes(); ytMessage('Источники вернули ссылки, но аудио не воспроизводится. Попробуй другой интернет или загрузи MP3.'); ytSetPlaying(false); } else setTimeout(ytNextAutomatic,500); } return; } if (S.cur != null) { toast('Файл не открывается — пропускаю'); setTimeout(() => step(1, true), 600); } };
 $('seek').oninput = e => {
   if (audio.duration) audio.currentTime = e.target.value / 1000 * audio.duration;
 };
@@ -641,7 +641,7 @@ $('plClose').onclick = () => { $('plModal').hidden = true; };
 
 /* ---------- Мульти-источник: Internet Archive + Jamendo + SoundCloud ---------- */
 let ytQ = [], ytIdx = -1, yt = null, ytReady = null;
-let ytPlayerReadyPromise = null, ytSearchToken = 0, ytMode = false, ytWaveLoading = false;
+let ytPlayerReadyPromise = null, ytSearchToken = 0, ytMode = false, ytWaveLoading = false, ytFailedSkips = 0;
 let sourceSettings = { jamendo: '', soundcloud: '' };
 const ytSeeds = [
   'popular pop music', 'indie pop songs', 'dance music', 'rock music', 'chill electronic',
@@ -695,25 +695,30 @@ async function fetchSoundCloud(query, limit=18) {
   const j = await r.json(); const items = Array.isArray(j) ? j : (j.collection || []);
   return items.filter(x=>x.access==='playable' || !x.access).map(x=>normalTrack('soundcloud',{id:x.urn||x.id,title:x.title,artist:x.user?.username,duration:(x.duration||0)/1000,thumb:x.artwork_url||'',url:x.permalink_url}));
 }
-async function fetchJsonTimeout(url, options={}, timeoutMs=9000) {
+async function fetchJsonTimeout(url, options={}, timeoutMs=7000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {...options, signal: controller.signal});
+    const response = await fetch(url, {...options, signal: controller.signal, mode:'cors'});
     if (!response.ok) throw new Error('HTTP ' + response.status);
     return await response.json();
   } finally { clearTimeout(timer); }
 }
 async function archiveSearchDocs(query, limit) {
-  const clean = String(query || '').replace(/[\\()[\]{}:"']/g, ' ').replace(/\s+/g, ' ').trim();
   const u = new URL('https://archive.org/advancedsearch.php');
-  // Search by broad terms instead of requiring a literal multi-word phrase.
-  const words = clean.split(' ').filter(Boolean).slice(0, 5);
-  let terms = words.length ? words.map(w => `(${['title','creator','subject'].map(field => `${field}:${w}`).join(' OR ')})`).join(' AND ') : '(title:music OR subject:music)';
-  u.searchParams.set('q', `mediatype:audio AND (${terms})`);
-  u.searchParams.append('fl[]', 'identifier'); u.searchParams.append('fl[]', 'title'); u.searchParams.append('fl[]', 'creator');
-  u.searchParams.set('rows', String(limit)); u.searchParams.set('page', '1'); u.searchParams.set('output', 'json'); u.searchParams.append('sort[]', 'downloads desc');
-  const json = await fetchJsonTimeout(u.toString(), {}, 9000);
+  // Keep the query simple and reliable; the old AND-of-every-word query was too restrictive.
+  const q = String(query || '').toLowerCase();
+  let term = 'mediatype:audio AND (title:music OR subject:music OR title:live OR subject:audio)';
+  if (q && q !== 'music') {
+    const safe = q.replace(/[^a-z0-9\s-]/gi, ' ').trim().split(/\s+/).filter(Boolean).slice(0,3);
+    if (safe.length) term = 'mediatype:audio AND (' + safe.map(w => `(title:${w} OR creator:${w} OR subject:${w})`).join(' OR ') + ')';
+  }
+  u.searchParams.set('q', term);
+  ['identifier','title','creator'].forEach(f => u.searchParams.append('fl[]', f));
+  u.searchParams.set('rows', String(Math.max(8, Math.min(limit, 15))));
+  u.searchParams.set('page', '1'); u.searchParams.set('output', 'json');
+  u.searchParams.append('sort[]', 'downloads desc');
+  const json = await fetchJsonTimeout(u.toString(), {}, 7000);
   return json.response?.docs || [];
 }
 async function archiveTracksFromDocs(docs, limit) {
@@ -734,17 +739,19 @@ async function archiveTracksFromDocs(docs, limit) {
   return tracks.filter(Boolean);
 }
 async function fetchArchive(query, limit=8) {
-  let docs = [];
-  try { docs = await archiveSearchDocs(query, limit); } catch (e) { console.warn('Archive search failed:', e); }
-  let tracks = await archiveTracksFromDocs(docs, limit);
-  // Search broadly if the specific query produced no playable audio files.
-  if (!tracks.length && String(query).toLowerCase() !== 'music') {
+  // First try the requested query, then a broad query. Each attempt is independently bounded.
+  for (const q of [query, 'music']) {
     try {
-      const fallbackDocs = await archiveSearchDocs('music', limit);
-      tracks = await archiveTracksFromDocs(fallbackDocs, limit);
-    } catch (e) { console.warn('Archive fallback failed:', e); }
+      const docs = await archiveSearchDocs(q, limit);
+      const tracks = await Promise.race([
+        archiveTracksFromDocs(docs, limit),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Archive metadata timeout')), 8000))
+      ]);
+      if (tracks.length) return tracks;
+    } catch (e) { console.warn('Internet Archive search failed:', q, e); }
+    if (String(q).toLowerCase() === 'music') break;
   }
-  return tracks;
+  return [];
 }
 function fetchLocal(query, includeAll=false) {
   const q=(query||'').toLowerCase();
@@ -753,16 +760,20 @@ function fetchLocal(query, includeAll=false) {
     .filter(ytTrackAllowed);
 }
 async function fetchAllSources(query, limit=25, includeAllLocal=false) {
-  const withTimeout = (promise, ms=11000) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Тайм-аут источника')), ms))]);
-  const jobs = [withTimeout(fetchArchive(query, Math.min(8,limit)), 19000)];
-  if (sourceSettings.jamendo) jobs.push(withTimeout(fetchJamendo(query,limit), 11000));
-  if (sourceSettings.soundcloud) jobs.push(withTimeout(fetchSoundCloud(query,limit), 11000));
+  const bounded = (promise, ms, label) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(label + ': тайм-аут')), ms))]);
+  const jobs = [bounded(fetchArchive(query, Math.min(10,limit)), 18000, 'Internet Archive')];
+  if (sourceSettings.jamendo) jobs.push(bounded(fetchJamendo(query,limit), 8000, 'Jamendo'));
+  if (sourceSettings.soundcloud) jobs.push(bounded(fetchSoundCloud(query,limit), 8000, 'SoundCloud'));
   const results = await Promise.allSettled(jobs);
   const good = results.filter(x=>x.status==='fulfilled').flatMap(x=>x.value);
   good.push(...fetchLocal(query, includeAllLocal));
-  const failures = results.filter(x=>x.status==='rejected');
-  if (!good.length && failures.length) throw new Error('Не удалось получить музыку. Проверь соединение и настройки API.');
-  const seen=new Set(); return mix(good.filter(t=>{if(seen.has(t.id)) return false; seen.add(t.id); return ytTrackAllowed(t);})).slice(0,limit);
+  const seen=new Set();
+  const tracks=mix(good.filter(t=>{if(seen.has(t.id)) return false; seen.add(t.id); return ytTrackAllowed(t);})).slice(0,limit);
+  if (!tracks.length) {
+    const errors=results.filter(x=>x.status==='rejected').map(x=>String(x.reason?.message||''));
+    if (errors.length) console.warn('Music source errors:', errors);
+  }
+  return tracks;
 }
 async function ytSearch() {
   const query=$('ytq').value.trim(); if(!query) return toast('Введи название песни или исполнителя');
@@ -775,7 +786,7 @@ async function ytSearch() {
   } catch(error) { if(token===ytSearchToken) ytMessage(error.message||'Не удалось найти музыку'); }
 }
 async function ytStartWave() {
-  S.wave=true; S.shuffle=false; save2(); updModes(); ytQ=[]; ytIdx=-1; ytWaveLoading=false;
+  ytFailedSkips=0; S.wave=true; S.shuffle=false; save2(); updModes(); ytQ=[]; ytIdx=-1; ytWaveLoading=false;
   ytMessage('Подбираю музыку из доступных источников…'); await ytRefillWave(true);
 }
 async function ytRefillWave(start=false) {
@@ -784,11 +795,14 @@ async function ytRefillWave(start=false) {
     const liked=(S.ytLiked||[]).filter(ytTrackAllowed); let query;
     if(liked.length&&Math.random()<0.45) { const seed=liked[Math.floor(Math.random()*liked.length)]; query=Math.random()<0.5?seed.ch:`${seed.ch} similar music`; if(!query||query==='undefined') query=seed.title; }
     else query=ytSeeds[Math.floor(Math.random()*ytSeeds.length)];
-    const found=await fetchAllSources(S.kids?query+' kids songs':query,30,true);
+    const found=await Promise.race([
+      fetchAllSources(S.kids?query+' kids songs':query,30,true),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error('Поиск превысил лимит времени (20 секунд)')),20000))
+    ]);
     const existing=new Set(ytQ.map(t=>t.id)); const fresh=found.filter(t=>!existing.has(t.id));
     ytQ.push(...fresh); renderYT();
-    if((start||ytIdx<0)&&ytQ.length) await ytPlay(Math.floor(Math.random()*Math.min(ytQ.length,Math.min(10,ytQ.length))));
-    else if(!fresh.length&&!ytQ.length) { S.wave=false; save2(); updModes(); ytMessage('Не удалось найти доступное аудио. Проверь интернет или добавь MP3-файлы; необязательные API-источники можно подключить в настройках.'); }
+    if((start||ytIdx<0)&&ytQ.length) { ytPlay(Math.floor(Math.random()*Math.min(ytQ.length,10))); }
+    else if(!fresh.length&&!ytQ.length) { S.wave=false; save2(); updModes(); ytMessage('Источники не вернули треки. Проверь подключение к интернету или загрузи MP3.'); }
   } catch(error) { S.wave=false; save2(); updModes(); ytMessage((error.name==='AbortError'||/тайм-аут/i.test(error.message||''))?'Источник не ответил вовремя. Попробуй ещё раз или добавь MP3-файлы.':(error.message||'Не удалось подобрать музыку')); toast('Поиск завершён: музыка не найдена'); }
   finally { ytWaveLoading=false; }
 }
@@ -816,9 +830,20 @@ async function ytPlay(index) {
   $('cur').textContent='0:00'; $('dur').textContent=track.duration?fmt(track.duration):'0:00'; $('seek').value=0; $('seek').style.setProperty('--p','0%');
   $('label').style.backgroundImage=track.thumb?`url("${track.thumb}")`:''; $('label').classList.toggle('has',!!track.thumb); renderYT();
   try {
-    const streamUrl=await resolveStream(track); audio.crossOrigin='anonymous'; audio.src=streamUrl; audio.load(); await audio.play();
+    const streamUrl=await Promise.race([
+      resolveStream(track),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error('Источник не выдал аудио за 8 секунд')),8000))
+    ]);
+    // Do not force CORS mode for remote audio: some otherwise playable archive streams omit CORS headers.
+    audio.removeAttribute('crossorigin'); audio.src=streamUrl; audio.load();
+    const playResult = audio.play();
+    if (playResult && typeof playResult.catch === 'function') playResult.catch(err => {
+      console.warn('Playback was blocked:', err);
+      toast('Браузер заблокировал запуск. Нажми ▶ для воспроизведения.');
+      ytSetPlaying(false);
+    });
     if('mediaSession' in navigator) try{navigator.mediaSession.metadata=new MediaMetadata({title:track.title,artist:track.ch||'',artwork:track.thumb?[{src:track.thumb}]:[]});}catch{}
-  } catch(error) { console.error(error); toast((track.source||'Источник')+': трек недоступен, пропускаю'); if(S.wave) setTimeout(ytNextAutomatic,450); }
+  } catch(error) { console.error(error); toast((track.source||'Источник')+': трек недоступен'); if(S.wave) { ytFailedSkips++; if(ytFailedSkips>=Math.max(3,ytQ.length)) { S.wave=false; save2(); updModes(); ytMessage('Найденные ссылки не воспроизводятся. Попробуй другой источник или загрузи MP3.'); ytSetPlaying(false); } else setTimeout(ytNextAutomatic,450); } }
 }
 async function ytNextAutomatic() {
   if(!ytMode) return;
