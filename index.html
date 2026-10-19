@@ -695,24 +695,56 @@ async function fetchSoundCloud(query, limit=18) {
   const j = await r.json(); const items = Array.isArray(j) ? j : (j.collection || []);
   return items.filter(x=>x.access==='playable' || !x.access).map(x=>normalTrack('soundcloud',{id:x.urn||x.id,title:x.title,artist:x.user?.username,duration:(x.duration||0)/1000,thumb:x.artwork_url||'',url:x.permalink_url}));
 }
-async function fetchArchive(query, limit=12) {
+async function fetchJsonTimeout(url, options={}, timeoutMs=9000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {...options, signal: controller.signal});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return await response.json();
+  } finally { clearTimeout(timer); }
+}
+async function archiveSearchDocs(query, limit) {
+  const clean = String(query || '').replace(/[\\()[\]{}:"']/g, ' ').replace(/\s+/g, ' ').trim();
   const u = new URL('https://archive.org/advancedsearch.php');
-  u.searchParams.set('q',`mediatype:audio AND (title:(${query}) OR creator:(${query}) OR subject:(${query}))`);
-  u.searchParams.set('fl[]','identifier'); u.searchParams.append('fl[]','title'); u.searchParams.append('fl[]','creator');
-  u.searchParams.set('rows',String(limit)); u.searchParams.set('page','1'); u.searchParams.set('output','json'); u.searchParams.set('sort[]','downloads desc');
-  const r = await fetch(u); if (!r.ok) throw new Error('Internet Archive: HTTP '+r.status);
-  const j = await r.json(); const docs = j.response?.docs || [];
-  const tracks = await Promise.all(docs.slice(0,limit).map(async d=>{
+  // Search by broad terms instead of requiring a literal multi-word phrase.
+  const words = clean.split(' ').filter(Boolean).slice(0, 5);
+  let terms = words.length ? words.map(w => `(${['title','creator','subject'].map(field => `${field}:${w}`).join(' OR ')})`).join(' AND ') : '(title:music OR subject:music)';
+  u.searchParams.set('q', `mediatype:audio AND (${terms})`);
+  u.searchParams.append('fl[]', 'identifier'); u.searchParams.append('fl[]', 'title'); u.searchParams.append('fl[]', 'creator');
+  u.searchParams.set('rows', String(limit)); u.searchParams.set('page', '1'); u.searchParams.set('output', 'json'); u.searchParams.append('sort[]', 'downloads desc');
+  const json = await fetchJsonTimeout(u.toString(), {}, 9000);
+  return json.response?.docs || [];
+}
+async function archiveTracksFromDocs(docs, limit) {
+  if (!docs.length) return [];
+  const tracks = await Promise.all(docs.slice(0, Math.min(limit, 6)).map(async d => {
     try {
-      const mr=await fetch('https://archive.org/metadata/'+encodeURIComponent(d.identifier)); if(!mr.ok) return null;
-      const meta=await mr.json(); const files=(meta.files||[]).filter(f=>/\.(mp3|ogg|oga|m4a|flac|wav)$/i.test(f.name||'') && !f.name.includes('__ia_thumb'));
-      files.sort((a,b)=>{const score=f=>(/\.mp3$/i.test(f.name)?5:/\.m4a$/i.test(f.name)?4:/\.ogg$/i.test(f.name)?3:/\.flac$/i.test(f.name)?2:1) - (f.source==='original'?0:0); return score(b)-score(a);});
-      const f=files[0]; if(!f) return null;
-      const base='https://archive.org/download/'+encodeURIComponent(d.identifier)+'/'+f.name.split('/').map(encodeURIComponent).join('/');
-      return normalTrack('archive',{id:d.identifier+'|'+f.name,title:d.title||d.identifier,creator:Array.isArray(d.creator)?d.creator.join(', '):(d.creator||''),duration:Number(f.duration||0),url:base,thumb:'https://archive.org/services/img/'+encodeURIComponent(d.identifier)});
-    } catch { return null; }
+      const meta = await fetchJsonTimeout('https://archive.org/metadata/' + encodeURIComponent(d.identifier), {}, 7000);
+      const files = (meta.files || []).filter(f => /\.(mp3|ogg|oga|m4a|flac|wav)$/i.test(f.name || '') && !String(f.name).includes('__ia_thumb') && !String(f.name).includes('/'));
+      files.sort((a,b) => {
+        const score = f => (/\.mp3$/i.test(f.name) ? 5 : /\.m4a$/i.test(f.name) ? 4 : /\.ogg$/i.test(f.name) ? 3 : /\.flac$/i.test(f.name) ? 2 : 1) + (f.source === 'original' ? 0.2 : 0);
+        return score(b) - score(a);
+      });
+      const f = files[0]; if (!f) return null;
+      const base = 'https://archive.org/download/' + encodeURIComponent(d.identifier) + '/' + f.name.split('/').map(encodeURIComponent).join('/');
+      return normalTrack('archive', {id:d.identifier + '|' + f.name, title:d.title || d.identifier, creator:Array.isArray(d.creator) ? d.creator.join(', ') : (d.creator || ''), duration:Number(f.duration || 0), url:base, thumb:'https://archive.org/services/img/' + encodeURIComponent(d.identifier)});
+    } catch (e) { console.warn('Archive metadata failed:', d.identifier, e); return null; }
   }));
   return tracks.filter(Boolean);
+}
+async function fetchArchive(query, limit=8) {
+  let docs = [];
+  try { docs = await archiveSearchDocs(query, limit); } catch (e) { console.warn('Archive search failed:', e); }
+  let tracks = await archiveTracksFromDocs(docs, limit);
+  // Search broadly if the specific query produced no playable audio files.
+  if (!tracks.length && String(query).toLowerCase() !== 'music') {
+    try {
+      const fallbackDocs = await archiveSearchDocs('music', limit);
+      tracks = await archiveTracksFromDocs(fallbackDocs, limit);
+    } catch (e) { console.warn('Archive fallback failed:', e); }
+  }
+  return tracks;
 }
 function fetchLocal(query, includeAll=false) {
   const q=(query||'').toLowerCase();
@@ -721,9 +753,10 @@ function fetchLocal(query, includeAll=false) {
     .filter(ytTrackAllowed);
 }
 async function fetchAllSources(query, limit=25, includeAllLocal=false) {
-  const jobs = [fetchArchive(query, Math.min(12,limit))];
-  if (sourceSettings.jamendo) jobs.push(fetchJamendo(query,limit));
-  if (sourceSettings.soundcloud) jobs.push(fetchSoundCloud(query,limit));
+  const withTimeout = (promise, ms=11000) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Тайм-аут источника')), ms))]);
+  const jobs = [withTimeout(fetchArchive(query, Math.min(8,limit)), 19000)];
+  if (sourceSettings.jamendo) jobs.push(withTimeout(fetchJamendo(query,limit), 11000));
+  if (sourceSettings.soundcloud) jobs.push(withTimeout(fetchSoundCloud(query,limit), 11000));
   const results = await Promise.allSettled(jobs);
   const good = results.filter(x=>x.status==='fulfilled').flatMap(x=>x.value);
   good.push(...fetchLocal(query, includeAllLocal));
@@ -738,7 +771,7 @@ async function ytSearch() {
     const found=await fetchAllSources(S.kids?query+' children songs':query,36);
     if(token!==ytSearchToken) return;
     ytQ=found; ytIdx=-1; S.wave=false; save2(); updModes(); renderYT();
-    if(!ytQ.length) ytMessage('Ничего не найдено в доступных источниках. Попробуй другой запрос или подключи Jamendo/SoundCloud.');
+    if(!ytQ.length) ytMessage('Ничего не найдено. Проверь запрос, интернет или добавь MP3-файлы.');
   } catch(error) { if(token===ytSearchToken) ytMessage(error.message||'Не удалось найти музыку'); }
 }
 async function ytStartWave() {
@@ -751,12 +784,12 @@ async function ytRefillWave(start=false) {
     const liked=(S.ytLiked||[]).filter(ytTrackAllowed); let query;
     if(liked.length&&Math.random()<0.45) { const seed=liked[Math.floor(Math.random()*liked.length)]; query=Math.random()<0.5?seed.ch:`${seed.ch} similar music`; if(!query||query==='undefined') query=seed.title; }
     else query=ytSeeds[Math.floor(Math.random()*ytSeeds.length)];
-    const found=await fetchAllSources(S.kids?query+' kids songs':query,30);
+    const found=await fetchAllSources(S.kids?query+' kids songs':query,30,true);
     const existing=new Set(ytQ.map(t=>t.id)); const fresh=found.filter(t=>!existing.has(t.id));
     ytQ.push(...fresh); renderYT();
     if((start||ytIdx<0)&&ytQ.length) await ytPlay(Math.floor(Math.random()*Math.min(ytQ.length,Math.min(10,ytQ.length))));
-    else if(!fresh.length&&!ytQ.length) ytMessage('Пока нет доступных треков. Добавь Jamendo Client ID или SoundCloud-токен либо попробуй позже.');
-  } catch(error) { ytMessage(error.message||'Не удалось подобрать музыку'); toast(error.message||'Ошибка источника музыки'); }
+    else if(!fresh.length&&!ytQ.length) { S.wave=false; save2(); updModes(); ytMessage('Не удалось найти доступное аудио. Проверь интернет или добавь MP3-файлы; необязательные API-источники можно подключить в настройках.'); }
+  } catch(error) { S.wave=false; save2(); updModes(); ytMessage((error.name==='AbortError'||/тайм-аут/i.test(error.message||''))?'Источник не ответил вовремя. Попробуй ещё раз или добавь MP3-файлы.':(error.message||'Не удалось подобрать музыку')); toast('Поиск завершён: музыка не найдена'); }
   finally { ytWaveLoading=false; }
 }
 async function resolveStream(track) {
