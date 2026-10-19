@@ -114,7 +114,7 @@ select{background:rgba(255,255,255,.06);color:var(--text);border:0;border-radius
 .sheet input{background:rgba(255,255,255,.07);border:1px solid transparent;border-radius:12px;padding:11px 12px;color:#fff;font-size:15px}
 .btns{display:flex;justify-content:flex-end;gap:8px}.btns .chip{padding:9px 16px;font-size:14px}
 .row.dim{opacity:.4}
-#ytbox{aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#000;display:none}#ytbox.on{display:block}#ytbox iframe{width:100%;height:100%}
+#ytbox{display:none!important}
 .eqrow{display:flex;flex-direction:column;gap:8px}.eqrow label{flex-direction:row!important;align-items:center;gap:10px!important}.eqrow span{width:58px;color:var(--text)}
 .sheet label.chk{flex-direction:row;align-items:center;gap:8px;color:var(--text);font-size:14px}
 .plist{display:flex;flex-wrap:wrap;gap:6px}
@@ -176,9 +176,9 @@ select{background:rgba(255,255,255,.06);color:var(--text);border:0;border-radius
 
   <section class="list-card">
     <div class="filters">
-      <input class="search" id="ytq" placeholder="Поиск в YouTube">
+      <input class="search" id="ytq" placeholder="Поиск музыки">
       <button class="chip" id="ytGo" aria-label="Искать"><span data-i="search"></span></button>
-      <button class="chip" id="ytLikes" aria-label="Мои лайки YouTube"><span data-i="heart"></span></button>
+      <button class="chip" id="ytLikes" aria-label="Мои любимые треки"><span data-i="heart"></span></button>
     </div>
     <div id="ytbox"><div id="ytplayer"></div></div>
     <div class="list" id="ytlist"></div>
@@ -392,6 +392,8 @@ async function deleteTrack(id) {
 /* ---------- воспроизведение ---------- */
 async function play(id, { auto = true, at = 0 } = {}) {
   const t = S.tracks.find(x => x.id === id); if (!t) return;
+  ytMode = false;
+  try { if (yt && yt.pauseVideo) yt.pauseVideo(); } catch {}
   S.cur = id; S.fo = 0; fadeIn();
   if (objURL) URL.revokeObjectURL(objURL);
   objURL = URL.createObjectURL(t.file); audio.src = objURL;
@@ -410,12 +412,14 @@ function setCover(t) {
   } else { l.style.backgroundImage = ''; l.classList.remove('has'); }
 }
 function togglePlay() {
+  if (ytMode) { audio.paused ? audio.play().catch(() => {}) : audio.pause(); return; }
   if (!S.tracks.length) return $('file').click();
   const v = view();
   if (S.cur == null) return v.length && play(v[0].id);
   audio.paused ? audio.play().catch(() => {}) : audio.pause();
 }
 function step(dir, fromEnd = false) {
+  if (ytMode && ytStep(dir)) return;
   const v = view().filter(t => !t.dis); if (!v.length) return;
   let id;
   if (S.shuffle || S.wave) {
@@ -431,31 +435,40 @@ function step(dir, fromEnd = false) {
   if (dir > 0 && S.cur != null) { S.hist.push(S.cur); if (S.hist.length > 50) S.hist.shift(); }
   haptic(); play(id);
 }
-const prev = () => (audio.currentTime > 3 ? (audio.currentTime = 0) : step(-1));
-const skip = s => { if (audio.duration) audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + s)); };
+const prev = () => {
+  if (ytMode) { if (audio.currentTime > 3) audio.currentTime = 0; else ytStep(-1); return; }
+  audio.currentTime > 3 ? (audio.currentTime = 0) : step(-1);
+};
+const skip = s => {
+  if (ytMode) { if (audio.duration) audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + s)); return; }
+  if (audio.duration) audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + s));
+};
 
 audio.onplay = audio.onpause = () => {
   const on = !audio.paused;
   if (on) { initAudio(); if (ac) ac.resume(); try { yt && yt.pauseVideo(); } catch {} }
   $('play').innerHTML = I(on ? 'pause' : 'play'); $('disc').classList.toggle('on', on); $('app').classList.toggle('playing', on);
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = on ? 'playing' : 'paused';
-  savePrefs();
+  if (!ytMode) savePrefs();
 };
 audio.ontimeupdate = () => {
   const d = audio.duration, c = audio.currentTime;
   if (d) { const p = c / d * 1000; $('seek').value = p; $('seek').style.setProperty('--p', p / 10 + '%'); $('dur').textContent = fmt(d); }
   $('cur').textContent = fmt(c);
   if (outG && S.fade && !S.fo && d && d - c < 3 && d - c > .2 && S.repeat !== 2) { S.fo = 1; const g = outG.gain, n = ac.currentTime; g.cancelScheduledValues(n); g.setValueAtTime(g.value, n); g.linearRampToValueAtTime(0, n + (d - c)); }
-  if (Date.now() - lastSave > 3000) { lastSave = Date.now(); savePrefs(); }
+  if (!ytMode && Date.now() - lastSave > 3000) { lastSave = Date.now(); savePrefs(); }
 };
 audio.onloadedmetadata = () => {   // длительность для старых треков без поля duration
+  if (ytMode) { updatePos(); return; }
   const t = S.tracks.find(x => x.id === S.cur);
   if (t && !t.duration && isFinite(audio.duration)) { t.duration = audio.duration; save(t); render(); }
   updatePos();
 };
-audio.onended = () => { if (S.repeat === 2) { audio.currentTime = 0; audio.play(); } else step(1, true); };
-audio.onerror = () => { if (S.cur != null) { toast('Файл не открывается — пропускаю'); setTimeout(() => step(1, true), 600); } };
-$('seek').oninput = e => { if (audio.duration) audio.currentTime = e.target.value / 1000 * audio.duration; };
+audio.onended = () => { if (ytMode) { if (S.repeat === 2) { audio.currentTime = 0; audio.play().catch(() => {}); } else ytNextAutomatic(); return; } if (S.repeat === 2) { audio.currentTime = 0; audio.play(); } else step(1, true); };
+audio.onerror = () => { if (ytMode) { toast('Поток недоступен, пробую следующий'); setTimeout(ytNextAutomatic, 500); return; } if (S.cur != null) { toast('Файл не открывается — пропускаю'); setTimeout(() => step(1, true), 600); } };
+$('seek').oninput = e => {
+  if (audio.duration) audio.currentTime = e.target.value / 1000 * audio.duration;
+};
 
 function resetUI() {
   $('title').textContent = 'Выберите трек'; $('artist').textContent = 'Добавьте музыку, чтобы начать';
@@ -535,17 +548,25 @@ $('modal').onclick = e => { if (e.target === $('modal')) $('modal').hidden = tru
 document.querySelector('.meta').onclick = () => { if (S.cur != null) openEdit(S.cur); };
 
 /* ---------- настройки v2 ---------- */
-const K2 = ['eq', 'fade', 'norm', 'lessAI', 'kids', 'wave', 'pl', 'playlists', 'ytKey', 'ytLiked', 'ytDis'];
-Object.assign(S, { eq: [0, 0, 0, 0, 0], fade: true, norm: false, lessAI: false, kids: false, wave: false, pl: '', playlists: {}, ytKey: '', ytLiked: [], ytDis: [] });
+const K2 = ['eq', 'fade', 'norm', 'lessAI', 'kids', 'wave', 'pl', 'playlists', 'ytLiked', 'ytDis'];
+Object.assign(S, { eq: [0, 0, 0, 0, 0], fade: true, norm: false, lessAI: false, kids: false, wave: false, pl: '', playlists: {}, ytLiked: [], ytDis: [] });
 function load2() { try { const j = JSON.parse(localStorage.getItem('beats2')) || {}; K2.forEach(k => { if (k in j) S[k] = j[k]; }); } catch {} }
 function save2() { try { localStorage.setItem('beats2', JSON.stringify(Object.fromEntries(K2.map(k => [k, S[k]])))); } catch {} }
 const AI_RE = /(^|[^a-zа-яё0-9])(ai|suno|udio|ии|нейро\w*|neural)([^a-zа-яё0-9]|$)/i;   // эвристика по словам в названии
 function upd2() {
   $('wave').classList.toggle('on', S.wave); $('lessAI').classList.toggle('on', S.lessAI); $('kids').classList.toggle('on', S.kids);
 }
-$('wave').onclick = () => { S.wave = !S.wave; if (S.wave) S.shuffle = false; save2(); updModes(); haptic(); if (S.wave && audio.paused) step(1); toast(S.wave ? 'Моя волна включена' : 'Моя волна выключена'); };
+$('wave').onclick = () => {
+  haptic();
+  if (S.wave) {
+    S.wave = false; save2(); updModes();
+    toast('Моя волна выключена');
+    return;
+  }
+  ytStartWave();
+};
 $('lessAI').onclick = () => { S.lessAI = !S.lessAI; save2(); updModes(); render(); renderYT(); toast(S.lessAI ? 'Скрываю треки с пометками ИИ' : 'Фильтр выключен'); };
-$('kids').onclick = () => { S.kids = !S.kids; save2(); updModes(); toast(S.kids ? 'Детский режим: строгий фильтр YouTube' : 'Детский режим выключен'); };
+$('kids').onclick = () => { S.kids = !S.kids; save2(); updModes(); toast(S.kids ? 'Детский режим включён' : 'Детский режим выключен'); };
 $('pl').onchange = e => { S.pl = e.target.value; save2(); render(); };
 
 /* ---------- эквалайзер и плавные переходы (Web Audio) ---------- */
@@ -607,62 +628,209 @@ $('plNew').onclick = () => { const n = $('plName').value.trim(); if (!n || S.pla
 $('plDel').onclick = () => { if (S.pl && confirm(`Удалить плейлист «${S.pl}»?`)) { delete S.playlists[S.pl]; S.pl = ''; save2(); renderPl(); render(); $('plModal').hidden = true; } };
 $('plClose').onclick = () => { $('plModal').hidden = true; };
 
-/* ---------- YouTube (официальный встроенный плеер + Data API) ---------- */
-let ytQ = [], ytIdx = -1, yt, ytReady;
-const dec = t => { const e = document.createElement('textarea'); e.innerHTML = t; return e.value; };
-function ytInit() {
-  return ytReady || (ytReady = new Promise(res => { const sc = document.createElement('script'); sc.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(sc); window.onYouTubeIframeAPIReady = res; }));
+/* ---------- Piped: поиск музыки и аудио-only «Моя волна» ---------- */
+let ytQ = [], ytIdx = -1, yt = null, ytReady = null;
+let ytPlayerReadyPromise = null, ytSearchToken = 0, ytMode = false, ytWaveLoading = false;
+let pipedBase = '';
+const ytSeeds = [
+  'popular music hits', 'new pop songs', 'indie pop songs', 'dance hits',
+  'rock classics', 'chill electronic music', 'alternative rock songs',
+  'R&B hits', 'lofi music', 'Kazakh pop music', 'Russian pop hits', 'international hits'
+];
+const PIPED_INSTANCES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.moomoo.me',
+  'https://pipedapi.tokhmi.xyz',
+  'https://pipedapi.syncpundit.com'
+];
+const dec = value => {
+  const el = document.createElement('textarea'); el.innerHTML = value || ''; return el.value;
+};
+const mix = arr => {
+  for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
+  return arr;
+};
+function ytMessage(message) {
+  const list = $('ytlist'); list.replaceChildren();
+  const el = document.createElement('div'); el.className = 'empty'; el.textContent = message; list.appendChild(el);
 }
-async function ytPlay(i) {
-  if (i < 0 || i >= ytQ.length) return;
-  await ytInit(); audio.pause(); ytIdx = i; $('ytbox').classList.add('on');
-  const id = ytQ[i].id;
-  if (!yt) yt = new YT.Player('ytplayer', { videoId: id, playerVars: { playsinline: 1, rel: 0, autoplay: 1 }, events: { onStateChange: e => { if (e.data === 0) ytPlay(ytIdx + 1); } } });
-  else yt.loadVideoById(id);
-  renderYT();
+function ytSetPlaying(playing) {
+  $('play').innerHTML = I(playing ? 'pause' : 'play');
+  $('disc').classList.toggle('on', playing); $('app').classList.toggle('playing', playing);
+  if ('mediaSession' in navigator) { try { navigator.mediaSession.playbackState = playing ? 'playing' : 'paused'; } catch {} }
+}
+function ytTrackAllowed(track) {
+  return track && track.id && !S.ytDis.includes(track.id) &&
+    (!S.lessAI || !AI_RE.test((track.title || '') + ' ' + (track.ch || '')));
+}
+async function pipedFetch(path) {
+  const candidates = pipedBase ? [pipedBase, ...PIPED_INSTANCES.filter(x => x !== pipedBase)] : PIPED_INSTANCES;
+  let lastError;
+  for (const base of candidates) {
+    try {
+      const response = await fetch(base + path, { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error('Piped вернул ошибку ' + response.status);
+      const data = await response.json(); pipedBase = base; return data;
+    } catch (e) { lastError = e; }
+  }
+  throw new Error('Сейчас недоступны серверы Piped. Попробуй ещё раз позже.');
+}
+function pipedVideoId(item) {
+  if (item?.id) return item.id;
+  const raw = item?.url || '';
+  try { return new URL(raw, 'https://www.youtube.com').searchParams.get('v') || ''; } catch { return ''; }
+}
+async function ytFetch(query, maxResults = 25) {
+  const data = await pipedFetch('/search?' + new URLSearchParams({ q: S.kids ? query + ' kids songs' : query, filter: 'music_songs' }));
+  const items = (data.items || []).filter(item => item.type === 'stream' || item.url || item.id).map(item => ({
+    id: pipedVideoId(item), title: dec(item.title), ch: dec(item.uploaderName || item.uploader || item.channelName || 'Музыка'),
+    thumb: item.thumbnail || item.thumbnailUrl || '', duration: Number(item.duration || 0)
+  })).filter(ytTrackAllowed);
+  return mix(items).slice(0, maxResults);
 }
 async function ytSearch() {
-  const q = $('ytq').value.trim(); if (!q) return;
-  if (!S.ytKey) return renderYT();
-  const u = new URL('https://www.googleapis.com/youtube/v3/search');
-  Object.entries({ part: 'snippet', type: 'video', videoCategoryId: '10', maxResults: 25, videoEmbeddable: 'true', safeSearch: S.kids ? 'strict' : 'moderate', q: S.kids ? q + ' детские песни' : q, key: S.ytKey }).forEach(([k, v]) => u.searchParams.set(k, v));
+  const query = $('ytq').value.trim();
+  if (!query) return toast('Введи название песни или исполнителя');
+  const token = ++ytSearchToken; ytMessage('Ищем музыку через Piped…');
   try {
-    const j = await (await fetch(u)).json();
-    if (j.error) return toast(j.error.message.slice(0, 90));
-    ytQ = j.items.map(i => ({ id: i.id.videoId, title: dec(i.snippet.title), ch: dec(i.snippet.channelTitle) })); ytIdx = -1; renderYT();
-  } catch { toast('Нет связи с YouTube'); }
+    const found = await ytFetch(query);
+    if (token !== ytSearchToken) return;
+    ytQ = found; ytIdx = -1; S.wave = false; save2(); updModes(); renderYT();
+    if (!ytQ.length) ytMessage('Ничего не найдено. Попробуй другой запрос.');
+  } catch (error) { if (token === ytSearchToken) ytMessage(error.message || 'Нет связи с Piped'); }
 }
-function renderYT() {
-  const L = $('ytlist'); L.replaceChildren();
-  if (!S.ytKey) {
-    const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'Вставьте ключ YouTube Data API v3, чтобы искать музыку:';
-    const inp = document.createElement('input'); inp.className = 'search'; inp.placeholder = 'API-ключ'; inp.style.width = '100%';
-    inp.onchange = () => { S.ytKey = inp.value.trim(); save2(); renderYT(); toast('Ключ сохранён'); };
-    L.append(e, inp); return;
+async function ytStartWave() {
+  S.wave = true; S.shuffle = false; save2(); updModes();
+  ytQ = []; ytIdx = -1; ytWaveLoading = false;
+  ytMessage('Подбираю музыку для твоей волны…');
+  await ytRefillWave(true);
+}
+async function ytRefillWave(start = false) {
+  if (!S.wave || ytWaveLoading) return;
+  ytWaveLoading = true;
+  try {
+    const liked = (S.ytLiked || []).filter(ytTrackAllowed);
+    let query;
+    if (liked.length && Math.random() < 0.45) {
+      const seed = liked[Math.floor(Math.random() * liked.length)];
+      query = Math.random() < 0.5 ? seed.ch : `${seed.ch} similar songs`;
+      if (!query || query === 'undefined') query = seed.title;
+    } else query = ytSeeds[Math.floor(Math.random() * ytSeeds.length)];
+    const found = await ytFetch(query, 25);
+    const existing = new Set(ytQ.map(t => t.id));
+    const fresh = found.filter(t => !existing.has(t.id));
+    ytQ.push(...fresh); renderYT();
+    if ((start || ytIdx < 0) && ytQ.length) await ytPlay(Math.floor(Math.random() * Math.min(ytQ.length, 10)));
+    else if (!fresh.length && !ytQ.length) ytMessage('Не удалось подобрать треки. Нажми «Моя волна» ещё раз.');
+  } catch (error) { ytMessage(error.message || 'Не удалось подобрать музыку'); toast(error.message || 'Ошибка Piped'); }
+  finally { ytWaveLoading = false; }
+}
+async function ytPlay(index) {
+  if (index < 0 || index >= ytQ.length) return;
+  const track = ytQ[index]; if (!track || !track.id) return;
+  ytIdx = index; ytMode = true; audio.pause();
+  if (objURL) { URL.revokeObjectURL(objURL); objURL = null; }
+  $('title').textContent = track.title; $('artist').textContent = track.ch || 'Piped';
+  $('cur').textContent = '0:00'; $('dur').textContent = track.duration ? fmt(track.duration) : '0:00';
+  $('seek').value = 0; $('seek').style.setProperty('--p', '0%');
+  $('label').style.backgroundImage = track.thumb ? `url("${track.thumb}")` : '';
+  $('label').classList.toggle('has', !!track.thumb);
+  renderYT();
+  try {
+    const data = await pipedFetch('/streams/' + encodeURIComponent(track.id));
+    const streams = (data.audioStreams || []).filter(x => x.url && x.videoOnly !== true && (!x.mimeType || x.mimeType.startsWith('audio/')));
+    streams.sort((a,b) => (parseInt(b.bitrate,10)||0) - (parseInt(a.bitrate,10)||0));
+    const stream = streams[0];
+    if (!stream) throw new Error('Для этого трека нет доступного аудиопотока');
+    audio.crossOrigin = 'anonymous';
+    audio.src = stream.url; audio.load();
+    await audio.play();
+    if ('mediaSession' in navigator) {
+      try { navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.ch || 'Piped', artwork: track.thumb ? [{ src: track.thumb }] : [] }); } catch {}
+    }
+  } catch (error) {
+    console.error(error); toast(error.message || 'Не удалось получить аудио из Piped');
+    if (S.wave) setTimeout(ytNextAutomatic, 500);
   }
-  ytQ = ytQ.filter(t => !S.ytDis.includes(t.id) && (!S.lessAI || !AI_RE.test(t.title + ' ' + t.ch)));
-  if (!ytQ.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'Введите запрос или откройте лайки (сердечко).'; L.appendChild(e); return; }
-  ytQ.forEach((t, i) => {
-    const row = document.createElement('div'); row.className = 'row' + (i === ytIdx ? ' cur' : ''); row.dataset.i = i;
-    const inf = document.createElement('div'); inf.className = 'inf';
-    const n = document.createElement('div'); n.className = 'n'; n.textContent = t.title;
-    const a = document.createElement('div'); a.className = 'a'; a.textContent = t.ch; inf.append(n, a);
-    const lk = document.createElement('button'); lk.className = 'mini fav'; lk.dataset.act = 'like'; lk.innerHTML = I('heart', S.ytLiked.some(x => x.id === t.id) ? 'currentColor' : 'none');
-    const ds = document.createElement('button'); ds.className = 'mini'; ds.dataset.act = 'dis'; ds.innerHTML = I('thumbdown');
-    row.append(inf, lk, ds); L.appendChild(row);
-  });
 }
-$('ytlist').addEventListener('click', e => {
-  const row = e.target.closest('.row'); if (!row) return;
-  const i = +row.dataset.i, t = ytQ[i], act = (e.target.closest('[data-act]') || {}).dataset?.act;
-  if (act === 'like') { const k = S.ytLiked.findIndex(x => x.id === t.id); k < 0 ? S.ytLiked.push(t) : S.ytLiked.splice(k, 1); save2(); haptic(); renderYT(); }
-  else if (act === 'dis') { S.ytDis.push(t.id); save2(); const was = i === ytIdx; ytQ.splice(i, 1); if (i < ytIdx) ytIdx--; renderYT(); if (was) { ytIdx--; ytPlay(i); } }
-  else ytPlay(i);
+async function ytNextAutomatic() {
+  if (!ytMode) return;
+  if (S.wave) {
+    let next = ytIdx + 1;
+    if (next >= ytQ.length) {
+      // Start a fresh batch if all currently queued tracks have been played.
+      ytQ = []; ytIdx = -1;
+      await ytRefillWave(false);
+      return;
+    }
+    return ytPlay(next);
+  }
+  if (ytIdx + 1 < ytQ.length) return ytPlay(ytIdx + 1);
+  ytSetPlaying(false);
+}
+function ytStep(direction) {
+  if (!ytMode) return false;
+  if (direction < 0 && audio.currentTime > 3) audio.currentTime = 0;
+  else if (direction < 0 && ytIdx > 0) ytPlay(ytIdx - 1);
+  else if (direction > 0 && ytIdx + 1 < ytQ.length) ytPlay(ytIdx + 1);
+  else if (direction > 0 && S.wave) ytNextAutomatic();
+  else if (direction < 0) audio.currentTime = 0;
+  return true;
+}
+function ytVisibleTracks() { return ytQ.filter(ytTrackAllowed); }
+function renderYT() {
+  const list = $('ytlist'); list.replaceChildren();
+  const visible = ytVisibleTracks();
+  if (!visible.length) {
+    ytMessage(S.wave ? 'Волна подбирает следующую музыку…' : 'Найди песню или включи «Моя волна».');
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  visible.forEach(track => {
+    const row = document.createElement('div'); row.className = 'row' + (ytQ[ytIdx]?.id === track.id ? ' cur' : ''); row.dataset.id = track.id;
+    const thumb = document.createElement('div'); thumb.className = 'thumb';
+    if (track.thumb) thumb.style.backgroundImage = `url("${track.thumb}")`; else thumb.innerHTML = I('music');
+    const info = document.createElement('div'); info.className = 'inf';
+    const name = document.createElement('div'); name.className = 'n'; name.textContent = track.title;
+    const artist = document.createElement('div'); artist.className = 'a'; artist.textContent = track.ch;
+    info.append(name, artist);
+    const like = document.createElement('button'); like.className = 'mini fav'; like.dataset.act = 'like'; like.setAttribute('aria-label', 'В избранное');
+    like.innerHTML = I('heart', S.ytLiked.some(item => item.id === track.id) ? 'currentColor' : 'none');
+    const dislike = document.createElement('button'); dislike.className = 'mini'; dislike.dataset.act = 'dis'; dislike.setAttribute('aria-label', 'Не рекомендовать'); dislike.innerHTML = I('thumbdown');
+    row.append(thumb, info, like, dislike); fragment.appendChild(row);
+  });
+  list.appendChild(fragment);
+}
+$('ytlist').addEventListener('click', event => {
+  const row = event.target.closest('.row');
+  if (!row) return;
+  const track = ytQ.find(item => item.id === row.dataset.id);
+  if (!track) return;
+  const action = event.target.closest('[data-act]')?.dataset.act;
+  if (action === 'like') {
+    const index = S.ytLiked.findIndex(item => item.id === track.id);
+    if (index < 0) S.ytLiked.push(track); else S.ytLiked.splice(index, 1);
+    save2(); haptic(); renderYT(); return;
+  }
+  if (action === 'dis') {
+    if (!S.ytDis.includes(track.id)) S.ytDis.push(track.id);
+    save2();
+    const wasPlaying = ytQ[ytIdx]?.id === track.id;
+    renderYT();
+    if (wasPlaying) {
+      if (ytMode) audio.pause();
+      if (S.wave) ytNextAutomatic();
+      else toast('Видео скрыто из рекомендаций');
+    }
+    return;
+  }
+  ytPlay(ytQ.findIndex(item => item.id === track.id));
 });
 $('ytGo').onclick = ytSearch;
-$('ytq').onkeydown = e => { if (e.key === 'Enter') ytSearch(); };
-$('ytLikes').onclick = () => { ytQ = [...S.ytLiked]; ytIdx = -1; renderYT(); };
-
+$('ytq').onkeydown = event => { if (event.key === 'Enter') ytSearch(); };
+$('ytLikes').onclick = () => {
+  ytQ = [...S.ytLiked].filter(ytTrackAllowed); ytIdx = -1; S.wave = false; save2(); updModes(); renderYT();
+};
 /* ---------- старт ---------- */
 (async function init() {
   const p = loadPrefs();
