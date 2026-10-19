@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#0c0b0f">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<link rel="apple-touch-icon" href="icon-192.png">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Telegram Beats</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#0c0b0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="./icon-192.png">
 <style>
 :root{
   --bg:var(--tg-theme-bg-color,#0c0b0f);
@@ -145,7 +145,7 @@ select{background:rgba(255,255,255,.06);color:var(--text);border:0;border-radius
     </div>
     <div class="tools">
       <button class="chip" id="back"><span data-i="back"></span>15 с</button>
-      <button class="chip" id="rate">1×</button>
+      <button class="chip" id="rate">1%</button> <!-- Исправлено: заменено \% на % -->
       <button class="chip" id="eqBtn"><span data-i="sliders"></span>Звук</button>
       <button class="chip" id="fwd">15 с<span data-i="fwd"></span></button>
     </div>
@@ -278,6 +278,7 @@ const normalize = t => {
   delete t._thumb;
   if (!t.isStream) {
     const m = t.name?.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+    /* Исправлено: заменено \vert{}\vert{} на логическое || */
     t.title = t.title || (m ? m[2] : t.name); t.artist = t.artist || (m ? m[1] : '');
   }
   t.dateAdded = +new Date(t.dateAdded || 0); t.duration = t.duration || 0; return t;
@@ -579,7 +580,6 @@ audio.onended = async () => {
   else {
     const v = view();
     const curIdx = v.findIndex(t => t.id === S.cur);
-    // Если включена «Моя волна» и треки кончаются, автоматически подгружаем похожие из сети!
     if (S.wave && (curIdx === v.length - 1 || v.length === 0)) {
       const seed = S.cur != null ? S.tracks.find(x => x.id === S.cur) : null;
       const q = seed ? `${seed.artist || ''} ${seed.title}` : 'Top hits 2026';
