@@ -187,9 +187,8 @@ select{background:rgba(255,255,255,.06);color:var(--text);border:0;border-radius
       <summary style="font-size:12px;color:var(--hint);cursor:pointer;padding:3px 0">Источники музыки и настройки</summary>
       <div class="source-settings" style="margin-top:9px">
         <input id="jamendoKey" autocomplete="off" placeholder="Jamendo Client ID (необязательно)">
-        <input id="soundcloudToken" autocomplete="off" placeholder="SoundCloud OAuth-токен (необязательно)" type="password">
         <button class="chip" id="saveSources" type="button" style="justify-content:center">Сохранить настройки источников</button>
-        <div class="source-note">Без ключей работает поиск по Internet Archive и локальным файлам. Jamendo и SoundCloud подключаются после добавления своих API-данных. Недоступные и регионально заблокированные треки пропускаются.</div>
+        <div class="source-note">Без настроек используются Audius, Internet Archive и локальные файлы. Jamendo — дополнительный каталог по Client ID. Audius может отдавать не все популярные хиты.</div>
       </div>
     </details>
     <div class="list" id="ytlist"></div>
@@ -639,10 +638,12 @@ $('plNew').onclick = () => { const n = $('plName').value.trim(); if (!n || S.pla
 $('plDel').onclick = () => { if (S.pl && confirm(`Удалить плейлист «${S.pl}»?`)) { delete S.playlists[S.pl]; S.pl = ''; save2(); renderPl(); render(); $('plModal').hidden = true; } };
 $('plClose').onclick = () => { $('plModal').hidden = true; };
 
-/* ---------- Мульти-источник: Internet Archive + Jamendo + SoundCloud ---------- */
+/* ---------- Мульти-источник: Audius + Internet Archive + Jamendo ---------- */
 let ytQ = [], ytIdx = -1, yt = null, ytReady = null;
 let ytPlayerReadyPromise = null, ytSearchToken = 0, ytMode = false, ytWaveLoading = false, ytFailedSkips = 0;
-let sourceSettings = { jamendo: '', soundcloud: '' };
+let sourceSettings = { jamendo: '' };
+const AUDIUS_NODES = ['https://api.audius.co/v1', 'https://discoveryprovider.audius.co/v1'];
+const AUDIUS_APP = 'telegram_beats_player';
 const ytSeeds = [
   'popular pop music', 'indie pop songs', 'dance music', 'rock music', 'chill electronic',
   'alternative rock', 'R&B music', 'lofi beats', 'Kazakh music', 'Russian pop', 'jazz music', 'instrumental'
@@ -665,11 +666,9 @@ function ytTrackAllowed(track) {
 function sourceLoadSettings() {
   try { sourceSettings = { ...sourceSettings, ...JSON.parse(localStorage.getItem('beatsSources') || '{}') }; } catch {}
   $('jamendoKey').value = sourceSettings.jamendo || '';
-  $('soundcloudToken').value = sourceSettings.soundcloud || '';
 }
 $('saveSources').onclick = () => {
   sourceSettings.jamendo = $('jamendoKey').value.trim();
-  sourceSettings.soundcloud = $('soundcloudToken').value.trim();
   try { localStorage.setItem('beatsSources', JSON.stringify(sourceSettings)); } catch {}
   toast('Настройки источников сохранены');
 };
@@ -686,15 +685,35 @@ async function fetchJamendo(query, limit=18) {
   const j = await r.json();
   return (j.results || []).filter(x=>x.audio).map(x=>normalTrack('jamendo',{id:x.id,title:x.name,artist:x.artist_name,duration:x.duration,thumb:x.album_image||x.image,url:x.audio}));
 }
-async function fetchSoundCloud(query, limit=18) {
-  if (!sourceSettings.soundcloud) return [];
-  const u = new URL('https://api.soundcloud.com/tracks');
-  u.searchParams.set('q',query); u.searchParams.set('access','playable'); u.searchParams.set('limit',String(limit)); u.searchParams.set('linked_partitioning','true');
-  const r = await fetch(u,{headers:{Authorization:'OAuth '+sourceSettings.soundcloud,Accept:'application/json'}});
-  if (!r.ok) throw new Error('SoundCloud: HTTP '+r.status);
-  const j = await r.json(); const items = Array.isArray(j) ? j : (j.collection || []);
-  return items.filter(x=>x.access==='playable' || !x.access).map(x=>normalTrack('soundcloud',{id:x.urn||x.id,title:x.title,artist:x.user?.username,duration:(x.duration||0)/1000,thumb:x.artwork_url||'',url:x.permalink_url}));
+async function fetchAudius(query, limit=18) {
+  const q = String(query || '').trim();
+  const urls = AUDIUS_NODES.map(base => {
+    const u = new URL(base + '/tracks/search');
+    u.searchParams.set('query', q || 'music');
+    u.searchParams.set('app_name', AUDIUS_APP);
+    u.searchParams.set('limit', String(Math.max(10, Math.min(limit, 25))));
+    return u.toString();
+  });
+  let lastError;
+  for (const url of urls) {
+    try {
+      const j = await fetchJsonTimeout(url, {}, 6500);
+      const items = Array.isArray(j.data) ? j.data : (Array.isArray(j.results) ? j.results : []);
+      const tracks = items.filter(x => x && x.id && x.is_streamable !== false).map(x => {
+        const art = x.artwork || {};
+        const thumb = art['150x150'] || art['480x480'] || art['1000x1000'] || '';
+        const id = String(x.id);
+        const stream = new URL(url.replace(/\/tracks\/search\?.*$/, '/tracks/' + encodeURIComponent(id) + '/stream'));
+        stream.searchParams.set('app_name', AUDIUS_APP);
+        return normalTrack('audius', {id, title:x.title, artist:x.user?.name || x.artist || 'Audius', duration:x.duration, thumb, url:stream.toString()});
+      });
+      if (tracks.length) return tracks;
+    } catch (e) { lastError = e; console.warn('Audius node failed:', e); }
+  }
+  if (lastError) throw lastError;
+  return [];
 }
+
 async function fetchJsonTimeout(url, options={}, timeoutMs=7000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -761,9 +780,8 @@ function fetchLocal(query, includeAll=false) {
 }
 async function fetchAllSources(query, limit=25, includeAllLocal=false) {
   const bounded = (promise, ms, label) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(label + ': тайм-аут')), ms))]);
-  const jobs = [bounded(fetchArchive(query, Math.min(10,limit)), 18000, 'Internet Archive')];
+  const jobs = [bounded(fetchAudius(query, Math.min(18,limit)), 15000, 'Audius'), bounded(fetchArchive(query, Math.min(8,limit)), 18000, 'Internet Archive')];
   if (sourceSettings.jamendo) jobs.push(bounded(fetchJamendo(query,limit), 8000, 'Jamendo'));
-  if (sourceSettings.soundcloud) jobs.push(bounded(fetchSoundCloud(query,limit), 8000, 'SoundCloud'));
   const results = await Promise.allSettled(jobs);
   const good = results.filter(x=>x.status==='fulfilled').flatMap(x=>x.value);
   good.push(...fetchLocal(query, includeAllLocal));
@@ -777,7 +795,7 @@ async function fetchAllSources(query, limit=25, includeAllLocal=false) {
 }
 async function ytSearch() {
   const query=$('ytq').value.trim(); if(!query) return toast('Введи название песни или исполнителя');
-  const token=++ytSearchToken; ytMessage('Ищем музыку во всех подключённых источниках…');
+  const token=++ytSearchToken; ytMessage('Ищу музыку в Audius и Internet Archive…');
   try {
     const found=await fetchAllSources(S.kids?query+' children songs':query,36);
     if(token!==ytSearchToken) return;
@@ -787,7 +805,7 @@ async function ytSearch() {
 }
 async function ytStartWave() {
   ytFailedSkips=0; S.wave=true; S.shuffle=false; save2(); updModes(); ytQ=[]; ytIdx=-1; ytWaveLoading=false;
-  ytMessage('Подбираю музыку из доступных источников…'); await ytRefillWave(true);
+  ytMessage('Ищу музыку в Audius и Internet Archive…'); await ytRefillWave(true);
 }
 async function ytRefillWave(start=false) {
   if(!S.wave||ytWaveLoading) return; ytWaveLoading=true;
@@ -808,18 +826,7 @@ async function ytRefillWave(start=false) {
 }
 async function resolveStream(track) {
   if(track.source==='local') { const local=S.tracks.find(t=>String(t.id)===track.sourceId); if(!local) throw new Error('Файл удалён из библиотеки'); return URL.createObjectURL(local.file); }
-  if(track.source==='jamendo') return track.url;
-  if(track.source==='archive') return track.url;
-  if(track.source==='soundcloud') {
-    const u='https://api.soundcloud.com/tracks/'+encodeURIComponent(track.sourceId)+'/streams';
-    const r=await fetch(u,{headers:{Authorization:'OAuth '+sourceSettings.soundcloud,Accept:'application/json'}});
-    if(!r.ok) throw new Error('SoundCloud не выдал поток ('+r.status+')');
-    const data=await r.json();
-    const stream=Array.isArray(data)?data.find(x=>x.format?.protocol==='progressive'||x.url):data;
-    const url=stream?.url||stream?.http_mp3_128_url||stream?.http_mp3_128_url;
-    if(!url) throw new Error('У SoundCloud нет доступного аудиопотока');
-    return url;
-  }
+  if(track.source==='jamendo' || track.source==='archive' || track.source==='audius') return track.url;
   if(track.url) return track.url;
   throw new Error('Нет ссылки на аудио');
 }
