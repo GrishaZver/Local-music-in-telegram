@@ -243,7 +243,7 @@ const paint = () => document.querySelectorAll('[data-i]').forEach(el => { el.inn
 const DROP_TXT = 'Добавить музыку или перетащить файлы сюда';
 const setDrop = t => { $('drop').innerHTML = I('plus') + ' ' + t; };
 
-const DB_NAME = 'TelegramMusicDB_Pro', STORE = 'tracks';   // то же имя — старые треки сохранятся
+const DB_NAME = 'TelegramMusicDB_Pro', STORE = 'tracks';
 const audio = $('audio');
 const S = { tracks: [], cur: null, shuffle: false, repeat: 0, rate: 1, sort: 'added', favOnly: false, hist: [] };
 const RATES = [1, 1.25, 1.5, 2, 0.75];
@@ -273,10 +273,10 @@ function tx(mode, fn) {
     t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error);
   });
 }
-const save = t => { const { _thumb, ...r } = t; return tx('readwrite', st => st.put(r)); };   // без временных blob-ссылок
+const save = t => { const { _thumb, ...r } = t; return tx('readwrite', st => st.put(r)); };
 const normalize = t => {
   delete t._thumb;
-  const m = t.name.match(/^(.+?)\s+[-–—]\s+(.+)$/);   // «Артист - Название» из имени файла
+  const m = t.name.match(/^(.+?)\s+[-–—]\s+(.+)$/);
   t.title = t.title || (m ? m[2] : t.name); t.artist = t.artist || (m ? m[1] : '');
   t.dateAdded = +new Date(t.dateAdded || 0); t.duration = t.duration || 0; return t;
 };
@@ -335,7 +335,7 @@ async function addFiles(files) {
   setDrop(DROP_TXT);
   toast(`Добавлено: ${added}` + (skipped ? `, дубликатов: ${skipped}` : ''));
   haptic('medium'); render();
-  try { navigator.storage.persist(); } catch {}   // просим браузер не чистить хранилище
+  try { navigator.storage.persist(); } catch {}
 }
 
 /* ---------- список ---------- */
@@ -458,7 +458,7 @@ audio.ontimeupdate = () => {
   if (outG && S.fade && !S.fo && d && d - c < 3 && d - c > .2 && S.repeat !== 2) { S.fo = 1; const g = outG.gain, n = ac.currentTime; g.cancelScheduledValues(n); g.setValueAtTime(g.value, n); g.linearRampToValueAtTime(0, n + (d - c)); }
   if (!ytMode && Date.now() - lastSave > 3000) { lastSave = Date.now(); savePrefs(); }
 };
-audio.onloadedmetadata = () => {   // длительность для старых треков без поля duration
+audio.onloadedmetadata = () => {
   if (ytMode) { updatePos(); return; }
   const t = S.tracks.find(x => x.id === S.cur);
   if (t && !t.duration && isFinite(audio.duration)) { t.duration = audio.duration; save(t); render(); }
@@ -495,12 +495,10 @@ $('next').onclick = () => step(1);
 $('back').onclick = () => skip(-15); $('fwd').onclick = () => skip(15);
 $('file').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 
-/* drag & drop */
 ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('drag'); }));
 ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('drag'); }));
 document.addEventListener('drop', e => addFiles(e.dataTransfer.files));
 
-/* клавиатура */
 document.addEventListener('keydown', e => {
   if (/INPUT|SELECT/.test(e.target.tagName) && e.target.type !== 'range') return;
   const k = e.key.toLowerCase();
@@ -510,7 +508,6 @@ document.addEventListener('keydown', e => {
   else if (k === 's') $('shuffle').click(); else if (k === 'r') $('repeat').click();
 });
 
-/* Media Session (экран блокировки, наушники) */
 function updatePos() {
   try { if (audio.duration) navigator.mediaSession.setPositionState({ duration: audio.duration, position: audio.currentTime, playbackRate: audio.playbackRate }); } catch {}
 }
@@ -552,7 +549,7 @@ const K2 = ['eq', 'fade', 'norm', 'lessAI', 'kids', 'wave', 'pl', 'playlists', '
 Object.assign(S, { eq: [0, 0, 0, 0, 0], fade: true, norm: false, lessAI: false, kids: false, wave: false, pl: '', playlists: {}, ytLiked: [], ytDis: [] });
 function load2() { try { const j = JSON.parse(localStorage.getItem('beats2')) || {}; K2.forEach(k => { if (k in j) S[k] = j[k]; }); } catch {} }
 function save2() { try { localStorage.setItem('beats2', JSON.stringify(Object.fromEntries(K2.map(k => [k, S[k]])))); } catch {} }
-const AI_RE = /(^|[^a-zа-яё0-9])(ai|suno|udio|ии|нейро\w*|neural)([^a-zа-яё0-9]|$)/i;   // эвристика по словам в названии
+const AI_RE = /(^|[^a-zа-яё0-9])(ai|suno|udio|ии|нейро\w*|neural)([^a-zа-яё0-9]|$)/i;
 function upd2() {
   $('wave').classList.toggle('on', S.wave); $('lessAI').classList.toggle('on', S.lessAI); $('kids').classList.toggle('on', S.kids);
 }
@@ -600,7 +597,7 @@ $('eqModal').onclick = e => { if (e.target === $('eqModal')) $('eqModal').hidden
 $('fadeCk').onchange = e => { S.fade = e.target.checked; save2(); };
 $('normCk').onchange = e => { S.norm = e.target.checked; applyNorm(); save2(); };
 
-/* ---------- дизлайк и плейлисты (через окно «О треке») ---------- */
+/* ---------- дизлайк и плейлисты ---------- */
 function updE(t) {
   $('eDis').innerHTML = I('thumbdown', t.dis ? 'currentColor' : 'none') + 'Не нравится'; $('eDis').classList.toggle('on', !!t.dis);
   $('ePl').innerHTML = I('plus') + 'В плейлист';
@@ -626,22 +623,27 @@ function openPl() {
 $('ePl').onclick = openPl;
 $('plNew').onclick = () => { const n = $('plName').value.trim(); if (!n || S.playlists[n]) return toast('Введите новое название'); S.playlists[n] = [editId]; $('plName').value = ''; save2(); renderPl(); openPl(); };
 $('plDel').onclick = () => { if (S.pl && confirm(`Удалить плейлист «${S.pl}»?`)) { delete S.playlists[S.pl]; S.pl = ''; save2(); renderPl(); render(); $('plModal').hidden = true; } };
-$('plClose').onclick = () => { $('plModal').hidden = true; };
+$('plClose').onclick = () => {$('plModal').hidden = true; };
 
-/* ---------- Piped: поиск музыки и аудио-only «Моя волна» ---------- */
+/* ---------- Piped: поиск музыки и аудио-only «Моя волна» (С обновленным списком и таймаутами) ---------- */
 let ytQ = [], ytIdx = -1, yt = null, ytReady = null;
-let ytPlayerReadyPromise = null, ytSearchToken = 0, ytMode = false, ytWaveLoading = false;
+let ytSearchToken = 0, ytMode = false, ytWaveLoading = false;
 let pipedBase = '';
 const ytSeeds = [
   'popular music hits', 'new pop songs', 'indie pop songs', 'dance hits',
   'rock classics', 'chill electronic music', 'alternative rock songs',
   'R&B hits', 'lofi music', 'Kazakh pop music', 'Russian pop hits', 'international hits'
 ];
+// Расширенный список стабильных публичных инстансов с таймаутом
 const PIPED_INSTANCES = [
   'https://pipedapi.kavin.rocks',
-  'https://pipedapi.moomoo.me',
   'https://pipedapi.tokhmi.xyz',
-  'https://pipedapi.syncpundit.com'
+  'https://pipedapi.moomoo.me',
+  'https://pipedapi.syncpundit.io',
+  'https://piped-api.lunar.icu',
+  'https://api.piped.privacydev.net',
+  'https://pipedapi.adminforge.de',
+  'https://pipedapi.smnz.de'
 ];
 const dec = value => {
   const el = document.createElement('textarea'); el.innerHTML = value || ''; return el.value;
@@ -656,7 +658,7 @@ function ytMessage(message) {
 }
 function ytSetPlaying(playing) {
   $('play').innerHTML = I(playing ? 'pause' : 'play');
-  $('disc').classList.toggle('on', playing); $('app').classList.toggle('playing', playing);
+  $('disc').classList.toggle('on', playing);$('app').classList.toggle('playing', playing);
   if ('mediaSession' in navigator) { try { navigator.mediaSession.playbackState = playing ? 'playing' : 'paused'; } catch {} }
 }
 function ytTrackAllowed(track) {
@@ -668,12 +670,22 @@ async function pipedFetch(path) {
   let lastError;
   for (const base of candidates) {
     try {
-      const response = await fetch(base + path, { headers: { Accept: 'application/json' } });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 секунды на попытку
+      const response = await fetch(base + path, { 
+        headers: { Accept: 'application/json' },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
       if (!response.ok) throw new Error('Piped вернул ошибку ' + response.status);
-      const data = await response.json(); pipedBase = base; return data;
-    } catch (e) { lastError = e; }
+      const data = await response.json(); 
+      pipedBase = base; 
+      return data;
+    } catch (e) { 
+      lastError = e; 
+    }
   }
-  throw new Error('Сейчас недоступны серверы Piped. Попробуй ещё раз позже.');
+  throw new Error('Все серверы Piped временно недоступны. Проверьте интернет.');
 }
 function pipedVideoId(item) {
   if (item?.id) return item.id;
@@ -731,9 +743,8 @@ async function ytPlay(index) {
   ytIdx = index; ytMode = true; audio.pause();
   if (objURL) { URL.revokeObjectURL(objURL); objURL = null; }
   $('title').textContent = track.title; $('artist').textContent = track.ch || 'Piped';
-  $('cur').textContent = '0:00'; $('dur').textContent = track.duration ? fmt(track.duration) : '0:00';
-  $('seek').value = 0; $('seek').style.setProperty('--p', '0%');
-  $('label').style.backgroundImage = track.thumb ? `url("${track.thumb}")` : '';
+  $('cur').textContent = '0:00';$('dur').textContent = track.duration ? fmt(track.duration) : '0:00';
+  $('seek').value = 0; $('seek').style.setProperty('--p', '0\%');$('label').style.backgroundImage = track.thumb ? `url("${track.thumb}")` : '';
   $('label').classList.toggle('has', !!track.thumb);
   renderYT();
   try {
@@ -758,7 +769,6 @@ async function ytNextAutomatic() {
   if (S.wave) {
     let next = ytIdx + 1;
     if (next >= ytQ.length) {
-      // Start a fresh batch if all currently queued tracks have been played.
       ytQ = []; ytIdx = -1;
       await ytRefillWave(false);
       return;
@@ -827,8 +837,7 @@ $('ytlist').addEventListener('click', event => {
   ytPlay(ytQ.findIndex(item => item.id === track.id));
 });
 $('ytGo').onclick = ytSearch;
-$('ytq').onkeydown = event => { if (event.key === 'Enter') ytSearch(); };
-$('ytLikes').onclick = () => {
+$('ytq').onkeydown = event => { if (event.key === 'Enter') ytSearch(); };$('ytLikes').onclick = () => {
   ytQ = [...S.ytLiked].filter(ytTrackAllowed); ytIdx = -1; S.wave = false; save2(); updModes(); renderYT();
 };
 /* ---------- старт ---------- */
