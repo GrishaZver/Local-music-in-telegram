@@ -115,6 +115,9 @@ select{background:rgba(255,255,255,.06);color:var(--text);border:0;border-radius
 .btns{display:flex;justify-content:flex-end;gap:8px}.btns .chip{padding:9px 16px;font-size:14px}
 .row.dim{opacity:.4}
 #ytbox{display:none!important}
+.source-settings{display:grid;grid-template-columns:1fr;gap:7px}
+.source-settings input{width:100%;min-width:0;background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:10px;padding:9px 11px;color:var(--text);font:inherit;font-size:12px}
+.source-note{font-size:11px;color:var(--hint);line-height:1.4}
 .eqrow{display:flex;flex-direction:column;gap:8px}.eqrow label{flex-direction:row!important;align-items:center;gap:10px!important}.eqrow span{width:58px;color:var(--text)}
 .sheet label.chk{flex-direction:row;align-items:center;gap:8px;color:var(--text);font-size:14px}
 .plist{display:flex;flex-wrap:wrap;gap:6px}
@@ -176,11 +179,19 @@ select{background:rgba(255,255,255,.06);color:var(--text);border:0;border-radius
 
   <section class="list-card">
     <div class="filters">
-      <input class="search" id="ytq" placeholder="Поиск музыки">
+      <input class="search" id="ytq" placeholder="Поиск по всем источникам">
       <button class="chip" id="ytGo" aria-label="Искать"><span data-i="search"></span></button>
       <button class="chip" id="ytLikes" aria-label="Мои любимые треки"><span data-i="heart"></span></button>
     </div>
-    <div id="ytbox"><div id="ytplayer"></div></div>
+    <details>
+      <summary style="font-size:12px;color:var(--hint);cursor:pointer;padding:3px 0">Источники музыки и настройки</summary>
+      <div class="source-settings" style="margin-top:9px">
+        <input id="jamendoKey" autocomplete="off" placeholder="Jamendo Client ID (необязательно)">
+        <input id="soundcloudToken" autocomplete="off" placeholder="SoundCloud OAuth-токен (необязательно)" type="password">
+        <button class="chip" id="saveSources" type="button" style="justify-content:center">Сохранить настройки источников</button>
+        <div class="source-note">Без ключей работает поиск по Internet Archive и локальным файлам. Jamendo и SoundCloud подключаются после добавления своих API-данных. Недоступные и регионально заблокированные треки пропускаются.</div>
+      </div>
+    </details>
     <div class="list" id="ytlist"></div>
   </section>
 </div>
@@ -243,7 +254,7 @@ const paint = () => document.querySelectorAll('[data-i]').forEach(el => { el.inn
 const DROP_TXT = 'Добавить музыку или перетащить файлы сюда';
 const setDrop = t => { $('drop').innerHTML = I('plus') + ' ' + t; };
 
-const DB_NAME = 'TelegramMusicDB_Pro', STORE = 'tracks';
+const DB_NAME = 'TelegramMusicDB_Pro', STORE = 'tracks';   // то же имя — старые треки сохранятся
 const audio = $('audio');
 const S = { tracks: [], cur: null, shuffle: false, repeat: 0, rate: 1, sort: 'added', favOnly: false, hist: [] };
 const RATES = [1, 1.25, 1.5, 2, 0.75];
@@ -273,10 +284,10 @@ function tx(mode, fn) {
     t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error);
   });
 }
-const save = t => { const { _thumb, ...r } = t; return tx('readwrite', st => st.put(r)); };
+const save = t => { const { _thumb, ...r } = t; return tx('readwrite', st => st.put(r)); };   // без временных blob-ссылок
 const normalize = t => {
   delete t._thumb;
-  const m = t.name.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  const m = t.name.match(/^(.+?)\s+[-–—]\s+(.+)$/);   // «Артист - Название» из имени файла
   t.title = t.title || (m ? m[2] : t.name); t.artist = t.artist || (m ? m[1] : '');
   t.dateAdded = +new Date(t.dateAdded || 0); t.duration = t.duration || 0; return t;
 };
@@ -335,7 +346,7 @@ async function addFiles(files) {
   setDrop(DROP_TXT);
   toast(`Добавлено: ${added}` + (skipped ? `, дубликатов: ${skipped}` : ''));
   haptic('medium'); render();
-  try { navigator.storage.persist(); } catch {}
+  try { navigator.storage.persist(); } catch {}   // просим браузер не чистить хранилище
 }
 
 /* ---------- список ---------- */
@@ -458,7 +469,7 @@ audio.ontimeupdate = () => {
   if (outG && S.fade && !S.fo && d && d - c < 3 && d - c > .2 && S.repeat !== 2) { S.fo = 1; const g = outG.gain, n = ac.currentTime; g.cancelScheduledValues(n); g.setValueAtTime(g.value, n); g.linearRampToValueAtTime(0, n + (d - c)); }
   if (!ytMode && Date.now() - lastSave > 3000) { lastSave = Date.now(); savePrefs(); }
 };
-audio.onloadedmetadata = () => {
+audio.onloadedmetadata = () => {   // длительность для старых треков без поля duration
   if (ytMode) { updatePos(); return; }
   const t = S.tracks.find(x => x.id === S.cur);
   if (t && !t.duration && isFinite(audio.duration)) { t.duration = audio.duration; save(t); render(); }
@@ -495,10 +506,12 @@ $('next').onclick = () => step(1);
 $('back').onclick = () => skip(-15); $('fwd').onclick = () => skip(15);
 $('file').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 
+/* drag & drop */
 ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('drag'); }));
 ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('drag'); }));
 document.addEventListener('drop', e => addFiles(e.dataTransfer.files));
 
+/* клавиатура */
 document.addEventListener('keydown', e => {
   if (/INPUT|SELECT/.test(e.target.tagName) && e.target.type !== 'range') return;
   const k = e.key.toLowerCase();
@@ -508,6 +521,7 @@ document.addEventListener('keydown', e => {
   else if (k === 's') $('shuffle').click(); else if (k === 'r') $('repeat').click();
 });
 
+/* Media Session (экран блокировки, наушники) */
 function updatePos() {
   try { if (audio.duration) navigator.mediaSession.setPositionState({ duration: audio.duration, position: audio.currentTime, playbackRate: audio.playbackRate }); } catch {}
 }
@@ -549,7 +563,7 @@ const K2 = ['eq', 'fade', 'norm', 'lessAI', 'kids', 'wave', 'pl', 'playlists', '
 Object.assign(S, { eq: [0, 0, 0, 0, 0], fade: true, norm: false, lessAI: false, kids: false, wave: false, pl: '', playlists: {}, ytLiked: [], ytDis: [] });
 function load2() { try { const j = JSON.parse(localStorage.getItem('beats2')) || {}; K2.forEach(k => { if (k in j) S[k] = j[k]; }); } catch {} }
 function save2() { try { localStorage.setItem('beats2', JSON.stringify(Object.fromEntries(K2.map(k => [k, S[k]])))); } catch {} }
-const AI_RE = /(^|[^a-zа-яё0-9])(ai|suno|udio|ии|нейро\w*|neural)([^a-zа-яё0-9]|$)/i;
+const AI_RE = /(^|[^a-zа-яё0-9])(ai|suno|udio|ии|нейро\w*|neural)([^a-zа-яё0-9]|$)/i;   // эвристика по словам в названии
 function upd2() {
   $('wave').classList.toggle('on', S.wave); $('lessAI').classList.toggle('on', S.lessAI); $('kids').classList.toggle('on', S.kids);
 }
@@ -597,7 +611,7 @@ $('eqModal').onclick = e => { if (e.target === $('eqModal')) $('eqModal').hidden
 $('fadeCk').onchange = e => { S.fade = e.target.checked; save2(); };
 $('normCk').onchange = e => { S.norm = e.target.checked; applyNorm(); save2(); };
 
-/* ---------- дизлайк и плейлисты ---------- */
+/* ---------- дизлайк и плейлисты (через окно «О треке») ---------- */
 function updE(t) {
   $('eDis').innerHTML = I('thumbdown', t.dis ? 'currentColor' : 'none') + 'Не нравится'; $('eDis').classList.toggle('on', !!t.dis);
   $('ePl').innerHTML = I('plus') + 'В плейлист';
@@ -623,228 +637,198 @@ function openPl() {
 $('ePl').onclick = openPl;
 $('plNew').onclick = () => { const n = $('plName').value.trim(); if (!n || S.playlists[n]) return toast('Введите новое название'); S.playlists[n] = [editId]; $('plName').value = ''; save2(); renderPl(); openPl(); };
 $('plDel').onclick = () => { if (S.pl && confirm(`Удалить плейлист «${S.pl}»?`)) { delete S.playlists[S.pl]; S.pl = ''; save2(); renderPl(); render(); $('plModal').hidden = true; } };
-$('plClose').onclick = () => {$('plModal').hidden = true; };
+$('plClose').onclick = () => { $('plModal').hidden = true; };
 
-/* ---------- Piped: поиск музыки и аудио-only «Моя волна» (С обновленным списком и таймаутами) ---------- */
+/* ---------- Мульти-источник: Internet Archive + Jamendo + SoundCloud ---------- */
 let ytQ = [], ytIdx = -1, yt = null, ytReady = null;
-let ytSearchToken = 0, ytMode = false, ytWaveLoading = false;
-let pipedBase = '';
+let ytPlayerReadyPromise = null, ytSearchToken = 0, ytMode = false, ytWaveLoading = false;
+let sourceSettings = { jamendo: '', soundcloud: '' };
 const ytSeeds = [
-  'popular music hits', 'new pop songs', 'indie pop songs', 'dance hits',
-  'rock classics', 'chill electronic music', 'alternative rock songs',
-  'R&B hits', 'lofi music', 'Kazakh pop music', 'Russian pop hits', 'international hits'
+  'popular pop music', 'indie pop songs', 'dance music', 'rock music', 'chill electronic',
+  'alternative rock', 'R&B music', 'lofi beats', 'Kazakh music', 'Russian pop', 'jazz music', 'instrumental'
 ];
-// Расширенный список стабильных публичных инстансов с таймаутом
-const PIPED_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://pipedapi.tokhmi.xyz',
-  'https://pipedapi.moomoo.me',
-  'https://pipedapi.syncpundit.io',
-  'https://piped-api.lunar.icu',
-  'https://api.piped.privacydev.net',
-  'https://pipedapi.adminforge.de',
-  'https://pipedapi.smnz.de'
-];
-const dec = value => {
-  const el = document.createElement('textarea'); el.innerHTML = value || ''; return el.value;
-};
-const mix = arr => {
-  for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
-  return arr;
-};
+const dec = value => { const el = document.createElement('textarea'); el.innerHTML = value || ''; return el.value; };
+const mix = arr => { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; };
 function ytMessage(message) {
   const list = $('ytlist'); list.replaceChildren();
   const el = document.createElement('div'); el.className = 'empty'; el.textContent = message; list.appendChild(el);
 }
 function ytSetPlaying(playing) {
   $('play').innerHTML = I(playing ? 'pause' : 'play');
-  $('disc').classList.toggle('on', playing);$('app').classList.toggle('playing', playing);
+  $('disc').classList.toggle('on', playing); $('app').classList.toggle('playing', playing);
   if ('mediaSession' in navigator) { try { navigator.mediaSession.playbackState = playing ? 'playing' : 'paused'; } catch {} }
 }
 function ytTrackAllowed(track) {
   return track && track.id && !S.ytDis.includes(track.id) &&
     (!S.lessAI || !AI_RE.test((track.title || '') + ' ' + (track.ch || '')));
 }
-async function pipedFetch(path) {
-  const candidates = pipedBase ? [pipedBase, ...PIPED_INSTANCES.filter(x => x !== pipedBase)] : PIPED_INSTANCES;
-  let lastError;
-  for (const base of candidates) {
+function sourceLoadSettings() {
+  try { sourceSettings = { ...sourceSettings, ...JSON.parse(localStorage.getItem('beatsSources') || '{}') }; } catch {}
+  $('jamendoKey').value = sourceSettings.jamendo || '';
+  $('soundcloudToken').value = sourceSettings.soundcloud || '';
+}
+$('saveSources').onclick = () => {
+  sourceSettings.jamendo = $('jamendoKey').value.trim();
+  sourceSettings.soundcloud = $('soundcloudToken').value.trim();
+  try { localStorage.setItem('beatsSources', JSON.stringify(sourceSettings)); } catch {}
+  toast('Настройки источников сохранены');
+};
+function normalTrack(provider, item) {
+  return { id: provider + ':' + item.id, source: provider, sourceId: String(item.id), title: dec(item.title || item.name || 'Без названия'),
+    ch: dec(item.ch || item.artist || item.creator || item.uploader || 'Неизвестный исполнитель'), thumb: item.thumb || item.image || '',
+    duration: Number(item.duration || 0), url: item.url || '', streamUrl: item.streamUrl || '' };
+}
+async function fetchJamendo(query, limit=18) {
+  if (!sourceSettings.jamendo) return [];
+  const u = new URL('https://api.jamendo.com/v3.0/tracks/');
+  Object.entries({client_id:sourceSettings.jamendo, format:'json', limit, search:query, audioformat:'mp31', order:'relevance', include:'musicinfo'}).forEach(([k,v])=>u.searchParams.set(k,v));
+  const r = await fetch(u); if (!r.ok) throw new Error('Jamendo: HTTP '+r.status);
+  const j = await r.json();
+  return (j.results || []).filter(x=>x.audio).map(x=>normalTrack('jamendo',{id:x.id,title:x.name,artist:x.artist_name,duration:x.duration,thumb:x.album_image||x.image,url:x.audio}));
+}
+async function fetchSoundCloud(query, limit=18) {
+  if (!sourceSettings.soundcloud) return [];
+  const u = new URL('https://api.soundcloud.com/tracks');
+  u.searchParams.set('q',query); u.searchParams.set('access','playable'); u.searchParams.set('limit',String(limit)); u.searchParams.set('linked_partitioning','true');
+  const r = await fetch(u,{headers:{Authorization:'OAuth '+sourceSettings.soundcloud,Accept:'application/json'}});
+  if (!r.ok) throw new Error('SoundCloud: HTTP '+r.status);
+  const j = await r.json(); const items = Array.isArray(j) ? j : (j.collection || []);
+  return items.filter(x=>x.access==='playable' || !x.access).map(x=>normalTrack('soundcloud',{id:x.urn||x.id,title:x.title,artist:x.user?.username,duration:(x.duration||0)/1000,thumb:x.artwork_url||'',url:x.permalink_url}));
+}
+async function fetchArchive(query, limit=12) {
+  const u = new URL('https://archive.org/advancedsearch.php');
+  u.searchParams.set('q',`mediatype:audio AND (title:(${query}) OR creator:(${query}) OR subject:(${query}))`);
+  u.searchParams.set('fl[]','identifier'); u.searchParams.append('fl[]','title'); u.searchParams.append('fl[]','creator');
+  u.searchParams.set('rows',String(limit)); u.searchParams.set('page','1'); u.searchParams.set('output','json'); u.searchParams.set('sort[]','downloads desc');
+  const r = await fetch(u); if (!r.ok) throw new Error('Internet Archive: HTTP '+r.status);
+  const j = await r.json(); const docs = j.response?.docs || [];
+  const tracks = await Promise.all(docs.slice(0,limit).map(async d=>{
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 секунды на попытку
-      const response = await fetch(base + path, { 
-        headers: { Accept: 'application/json' },
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      if (!response.ok) throw new Error('Piped вернул ошибку ' + response.status);
-      const data = await response.json(); 
-      pipedBase = base; 
-      return data;
-    } catch (e) { 
-      lastError = e; 
-    }
-  }
-  throw new Error('Все серверы Piped временно недоступны. Проверьте интернет.');
+      const mr=await fetch('https://archive.org/metadata/'+encodeURIComponent(d.identifier)); if(!mr.ok) return null;
+      const meta=await mr.json(); const files=(meta.files||[]).filter(f=>/\.(mp3|ogg|oga|m4a|flac|wav)$/i.test(f.name||'') && !f.name.includes('__ia_thumb'));
+      files.sort((a,b)=>{const score=f=>(/\.mp3$/i.test(f.name)?5:/\.m4a$/i.test(f.name)?4:/\.ogg$/i.test(f.name)?3:/\.flac$/i.test(f.name)?2:1) - (f.source==='original'?0:0); return score(b)-score(a);});
+      const f=files[0]; if(!f) return null;
+      const base='https://archive.org/download/'+encodeURIComponent(d.identifier)+'/'+f.name.split('/').map(encodeURIComponent).join('/');
+      return normalTrack('archive',{id:d.identifier+'|'+f.name,title:d.title||d.identifier,creator:Array.isArray(d.creator)?d.creator.join(', '):(d.creator||''),duration:Number(f.duration||0),url:base,thumb:'https://archive.org/services/img/'+encodeURIComponent(d.identifier)});
+    } catch { return null; }
+  }));
+  return tracks.filter(Boolean);
 }
-function pipedVideoId(item) {
-  if (item?.id) return item.id;
-  const raw = item?.url || '';
-  try { return new URL(raw, 'https://www.youtube.com').searchParams.get('v') || ''; } catch { return ''; }
+function fetchLocal(query, includeAll=false) {
+  const q=(query||'').toLowerCase();
+  return (S.tracks||[]).filter(t=>includeAll || (String(t.title||'')+' '+String(t.artist||'')).toLowerCase().includes(q))
+    .map(t=>({id:'local:'+t.id,source:'local',sourceId:String(t.id),title:t.title||t.name||'Без названия',ch:t.artist||'Моя библиотека',thumb:t.cover?(t._thumb||(t._thumb=URL.createObjectURL(t.cover))):'',duration:Number(t.duration||0),url:''}))
+    .filter(ytTrackAllowed);
 }
-async function ytFetch(query, maxResults = 25) {
-  const data = await pipedFetch('/search?' + new URLSearchParams({ q: S.kids ? query + ' kids songs' : query, filter: 'music_songs' }));
-  const items = (data.items || []).filter(item => item.type === 'stream' || item.url || item.id).map(item => ({
-    id: pipedVideoId(item), title: dec(item.title), ch: dec(item.uploaderName || item.uploader || item.channelName || 'Музыка'),
-    thumb: item.thumbnail || item.thumbnailUrl || '', duration: Number(item.duration || 0)
-  })).filter(ytTrackAllowed);
-  return mix(items).slice(0, maxResults);
+async function fetchAllSources(query, limit=25, includeAllLocal=false) {
+  const jobs = [fetchArchive(query, Math.min(12,limit))];
+  if (sourceSettings.jamendo) jobs.push(fetchJamendo(query,limit));
+  if (sourceSettings.soundcloud) jobs.push(fetchSoundCloud(query,limit));
+  const results = await Promise.allSettled(jobs);
+  const good = results.filter(x=>x.status==='fulfilled').flatMap(x=>x.value);
+  good.push(...fetchLocal(query, includeAllLocal));
+  const failures = results.filter(x=>x.status==='rejected');
+  if (!good.length && failures.length) throw new Error('Не удалось получить музыку. Проверь соединение и настройки API.');
+  const seen=new Set(); return mix(good.filter(t=>{if(seen.has(t.id)) return false; seen.add(t.id); return ytTrackAllowed(t);})).slice(0,limit);
 }
 async function ytSearch() {
-  const query = $('ytq').value.trim();
-  if (!query) return toast('Введи название песни или исполнителя');
-  const token = ++ytSearchToken; ytMessage('Ищем музыку через Piped…');
+  const query=$('ytq').value.trim(); if(!query) return toast('Введи название песни или исполнителя');
+  const token=++ytSearchToken; ytMessage('Ищем музыку во всех подключённых источниках…');
   try {
-    const found = await ytFetch(query);
-    if (token !== ytSearchToken) return;
-    ytQ = found; ytIdx = -1; S.wave = false; save2(); updModes(); renderYT();
-    if (!ytQ.length) ytMessage('Ничего не найдено. Попробуй другой запрос.');
-  } catch (error) { if (token === ytSearchToken) ytMessage(error.message || 'Нет связи с Piped'); }
+    const found=await fetchAllSources(S.kids?query+' children songs':query,36);
+    if(token!==ytSearchToken) return;
+    ytQ=found; ytIdx=-1; S.wave=false; save2(); updModes(); renderYT();
+    if(!ytQ.length) ytMessage('Ничего не найдено в доступных источниках. Попробуй другой запрос или подключи Jamendo/SoundCloud.');
+  } catch(error) { if(token===ytSearchToken) ytMessage(error.message||'Не удалось найти музыку'); }
 }
 async function ytStartWave() {
-  S.wave = true; S.shuffle = false; save2(); updModes();
-  ytQ = []; ytIdx = -1; ytWaveLoading = false;
-  ytMessage('Подбираю музыку для твоей волны…');
-  await ytRefillWave(true);
+  S.wave=true; S.shuffle=false; save2(); updModes(); ytQ=[]; ytIdx=-1; ytWaveLoading=false;
+  ytMessage('Подбираю музыку из доступных источников…'); await ytRefillWave(true);
 }
-async function ytRefillWave(start = false) {
-  if (!S.wave || ytWaveLoading) return;
-  ytWaveLoading = true;
+async function ytRefillWave(start=false) {
+  if(!S.wave||ytWaveLoading) return; ytWaveLoading=true;
   try {
-    const liked = (S.ytLiked || []).filter(ytTrackAllowed);
-    let query;
-    if (liked.length && Math.random() < 0.45) {
-      const seed = liked[Math.floor(Math.random() * liked.length)];
-      query = Math.random() < 0.5 ? seed.ch : `${seed.ch} similar songs`;
-      if (!query || query === 'undefined') query = seed.title;
-    } else query = ytSeeds[Math.floor(Math.random() * ytSeeds.length)];
-    const found = await ytFetch(query, 25);
-    const existing = new Set(ytQ.map(t => t.id));
-    const fresh = found.filter(t => !existing.has(t.id));
+    const liked=(S.ytLiked||[]).filter(ytTrackAllowed); let query;
+    if(liked.length&&Math.random()<0.45) { const seed=liked[Math.floor(Math.random()*liked.length)]; query=Math.random()<0.5?seed.ch:`${seed.ch} similar music`; if(!query||query==='undefined') query=seed.title; }
+    else query=ytSeeds[Math.floor(Math.random()*ytSeeds.length)];
+    const found=await fetchAllSources(S.kids?query+' kids songs':query,30);
+    const existing=new Set(ytQ.map(t=>t.id)); const fresh=found.filter(t=>!existing.has(t.id));
     ytQ.push(...fresh); renderYT();
-    if ((start || ytIdx < 0) && ytQ.length) await ytPlay(Math.floor(Math.random() * Math.min(ytQ.length, 10)));
-    else if (!fresh.length && !ytQ.length) ytMessage('Не удалось подобрать треки. Нажми «Моя волна» ещё раз.');
-  } catch (error) { ytMessage(error.message || 'Не удалось подобрать музыку'); toast(error.message || 'Ошибка Piped'); }
-  finally { ytWaveLoading = false; }
+    if((start||ytIdx<0)&&ytQ.length) await ytPlay(Math.floor(Math.random()*Math.min(ytQ.length,Math.min(10,ytQ.length))));
+    else if(!fresh.length&&!ytQ.length) ytMessage('Пока нет доступных треков. Добавь Jamendo Client ID или SoundCloud-токен либо попробуй позже.');
+  } catch(error) { ytMessage(error.message||'Не удалось подобрать музыку'); toast(error.message||'Ошибка источника музыки'); }
+  finally { ytWaveLoading=false; }
+}
+async function resolveStream(track) {
+  if(track.source==='local') { const local=S.tracks.find(t=>String(t.id)===track.sourceId); if(!local) throw new Error('Файл удалён из библиотеки'); return URL.createObjectURL(local.file); }
+  if(track.source==='jamendo') return track.url;
+  if(track.source==='archive') return track.url;
+  if(track.source==='soundcloud') {
+    const u='https://api.soundcloud.com/tracks/'+encodeURIComponent(track.sourceId)+'/streams';
+    const r=await fetch(u,{headers:{Authorization:'OAuth '+sourceSettings.soundcloud,Accept:'application/json'}});
+    if(!r.ok) throw new Error('SoundCloud не выдал поток ('+r.status+')');
+    const data=await r.json();
+    const stream=Array.isArray(data)?data.find(x=>x.format?.protocol==='progressive'||x.url):data;
+    const url=stream?.url||stream?.http_mp3_128_url||stream?.http_mp3_128_url;
+    if(!url) throw new Error('У SoundCloud нет доступного аудиопотока');
+    return url;
+  }
+  if(track.url) return track.url;
+  throw new Error('Нет ссылки на аудио');
 }
 async function ytPlay(index) {
-  if (index < 0 || index >= ytQ.length) return;
-  const track = ytQ[index]; if (!track || !track.id) return;
-  ytIdx = index; ytMode = true; audio.pause();
-  if (objURL) { URL.revokeObjectURL(objURL); objURL = null; }
-  $('title').textContent = track.title; $('artist').textContent = track.ch || 'Piped';
-  $('cur').textContent = '0:00';$('dur').textContent = track.duration ? fmt(track.duration) : '0:00';
-  $('seek').value = 0; $('seek').style.setProperty('--p', '0\%');$('label').style.backgroundImage = track.thumb ? `url("${track.thumb}")` : '';
-  $('label').classList.toggle('has', !!track.thumb);
-  renderYT();
+  if(index<0||index>=ytQ.length) return; const track=ytQ[index]; if(!track) return;
+  ytIdx=index; ytMode=true; audio.pause(); if(objURL){URL.revokeObjectURL(objURL);objURL=null;}
+  $('title').textContent=track.title; $('artist').textContent=(track.ch||'Неизвестный исполнитель')+' · '+track.source;
+  $('cur').textContent='0:00'; $('dur').textContent=track.duration?fmt(track.duration):'0:00'; $('seek').value=0; $('seek').style.setProperty('--p','0%');
+  $('label').style.backgroundImage=track.thumb?`url("${track.thumb}")`:''; $('label').classList.toggle('has',!!track.thumb); renderYT();
   try {
-    const data = await pipedFetch('/streams/' + encodeURIComponent(track.id));
-    const streams = (data.audioStreams || []).filter(x => x.url && x.videoOnly !== true && (!x.mimeType || x.mimeType.startsWith('audio/')));
-    streams.sort((a,b) => (parseInt(b.bitrate,10)||0) - (parseInt(a.bitrate,10)||0));
-    const stream = streams[0];
-    if (!stream) throw new Error('Для этого трека нет доступного аудиопотока');
-    audio.crossOrigin = 'anonymous';
-    audio.src = stream.url; audio.load();
-    await audio.play();
-    if ('mediaSession' in navigator) {
-      try { navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.ch || 'Piped', artwork: track.thumb ? [{ src: track.thumb }] : [] }); } catch {}
-    }
-  } catch (error) {
-    console.error(error); toast(error.message || 'Не удалось получить аудио из Piped');
-    if (S.wave) setTimeout(ytNextAutomatic, 500);
-  }
+    const streamUrl=await resolveStream(track); audio.crossOrigin='anonymous'; audio.src=streamUrl; audio.load(); await audio.play();
+    if('mediaSession' in navigator) try{navigator.mediaSession.metadata=new MediaMetadata({title:track.title,artist:track.ch||'',artwork:track.thumb?[{src:track.thumb}]:[]});}catch{}
+  } catch(error) { console.error(error); toast((track.source||'Источник')+': трек недоступен, пропускаю'); if(S.wave) setTimeout(ytNextAutomatic,450); }
 }
 async function ytNextAutomatic() {
-  if (!ytMode) return;
-  if (S.wave) {
-    let next = ytIdx + 1;
-    if (next >= ytQ.length) {
-      ytQ = []; ytIdx = -1;
-      await ytRefillWave(false);
-      return;
-    }
-    return ytPlay(next);
-  }
-  if (ytIdx + 1 < ytQ.length) return ytPlay(ytIdx + 1);
-  ytSetPlaying(false);
+  if(!ytMode) return;
+  if(S.wave) { let next=ytIdx+1; if(next>=ytQ.length){ytQ=[];ytIdx=-1;await ytRefillWave(false);return;} return ytPlay(next); }
+  if(ytIdx+1<ytQ.length) return ytPlay(ytIdx+1); ytSetPlaying(false);
 }
 function ytStep(direction) {
-  if (!ytMode) return false;
-  if (direction < 0 && audio.currentTime > 3) audio.currentTime = 0;
-  else if (direction < 0 && ytIdx > 0) ytPlay(ytIdx - 1);
-  else if (direction > 0 && ytIdx + 1 < ytQ.length) ytPlay(ytIdx + 1);
-  else if (direction > 0 && S.wave) ytNextAutomatic();
-  else if (direction < 0) audio.currentTime = 0;
+  if(!ytMode) return false;
+  if(direction<0&&audio.currentTime>3) audio.currentTime=0;
+  else if(direction<0&&ytIdx>0) ytPlay(ytIdx-1);
+  else if(direction>0&&ytIdx+1<ytQ.length) ytPlay(ytIdx+1);
+  else if(direction>0&&S.wave) ytNextAutomatic();
+  else if(direction<0) audio.currentTime=0;
   return true;
 }
-function ytVisibleTracks() { return ytQ.filter(ytTrackAllowed); }
+function ytVisibleTracks(){return ytQ.filter(ytTrackAllowed);}
 function renderYT() {
-  const list = $('ytlist'); list.replaceChildren();
-  const visible = ytVisibleTracks();
-  if (!visible.length) {
-    ytMessage(S.wave ? 'Волна подбирает следующую музыку…' : 'Найди песню или включи «Моя волна».');
-    return;
-  }
-  const fragment = document.createDocumentFragment();
-  visible.forEach(track => {
-    const row = document.createElement('div'); row.className = 'row' + (ytQ[ytIdx]?.id === track.id ? ' cur' : ''); row.dataset.id = track.id;
-    const thumb = document.createElement('div'); thumb.className = 'thumb';
-    if (track.thumb) thumb.style.backgroundImage = `url("${track.thumb}")`; else thumb.innerHTML = I('music');
-    const info = document.createElement('div'); info.className = 'inf';
-    const name = document.createElement('div'); name.className = 'n'; name.textContent = track.title;
-    const artist = document.createElement('div'); artist.className = 'a'; artist.textContent = track.ch;
-    info.append(name, artist);
-    const like = document.createElement('button'); like.className = 'mini fav'; like.dataset.act = 'like'; like.setAttribute('aria-label', 'В избранное');
-    like.innerHTML = I('heart', S.ytLiked.some(item => item.id === track.id) ? 'currentColor' : 'none');
-    const dislike = document.createElement('button'); dislike.className = 'mini'; dislike.dataset.act = 'dis'; dislike.setAttribute('aria-label', 'Не рекомендовать'); dislike.innerHTML = I('thumbdown');
-    row.append(thumb, info, like, dislike); fragment.appendChild(row);
-  });
-  list.appendChild(fragment);
+  const list=$('ytlist'); list.replaceChildren(); const visible=ytVisibleTracks();
+  if(!visible.length){ytMessage(S.wave?'Волна ищет доступную музыку…':'Введи запрос или нажми «Моя волна».');return;}
+  const fragment=document.createDocumentFragment();
+  visible.forEach(track=>{
+    const row=document.createElement('div'); row.className='row'+(ytQ[ytIdx]?.id===track.id?' cur':''); row.dataset.id=track.id;
+    const thumb=document.createElement('div');thumb.className='thumb';if(track.thumb)thumb.style.backgroundImage=`url("${track.thumb}")`;else thumb.innerHTML=I('music');
+    const info=document.createElement('div');info.className='inf';const name=document.createElement('div');name.className='n';name.textContent=track.title;
+    const artist=document.createElement('div');artist.className='a';artist.textContent=(track.ch||'Неизвестный исполнитель')+' · '+track.source;info.append(name,artist);
+    const like=document.createElement('button');like.className='mini fav';like.dataset.act='like';like.setAttribute('aria-label','В избранное');like.innerHTML=I('heart',S.ytLiked.some(item=>item.id===track.id)?'currentColor':'none');
+    const dislike=document.createElement('button');dislike.className='mini';dislike.dataset.act='dis';dislike.setAttribute('aria-label','Не рекомендовать');dislike.innerHTML=I('thumbdown');row.append(thumb,info,like,dislike);fragment.appendChild(row);
+  }); list.appendChild(fragment);
 }
-$('ytlist').addEventListener('click', event => {
-  const row = event.target.closest('.row');
-  if (!row) return;
-  const track = ytQ.find(item => item.id === row.dataset.id);
-  if (!track) return;
-  const action = event.target.closest('[data-act]')?.dataset.act;
-  if (action === 'like') {
-    const index = S.ytLiked.findIndex(item => item.id === track.id);
-    if (index < 0) S.ytLiked.push(track); else S.ytLiked.splice(index, 1);
-    save2(); haptic(); renderYT(); return;
-  }
-  if (action === 'dis') {
-    if (!S.ytDis.includes(track.id)) S.ytDis.push(track.id);
-    save2();
-    const wasPlaying = ytQ[ytIdx]?.id === track.id;
-    renderYT();
-    if (wasPlaying) {
-      if (ytMode) audio.pause();
-      if (S.wave) ytNextAutomatic();
-      else toast('Видео скрыто из рекомендаций');
-    }
-    return;
-  }
-  ytPlay(ytQ.findIndex(item => item.id === track.id));
+$('ytlist').addEventListener('click',event=>{
+  const row=event.target.closest('.row');if(!row)return;const track=ytQ.find(item=>item.id===row.dataset.id);if(!track)return;
+  const action=event.target.closest('[data-act]')?.dataset.act;
+  if(action==='like'){const index=S.ytLiked.findIndex(item=>item.id===track.id);if(index<0)S.ytLiked.push(track);else S.ytLiked.splice(index,1);save2();haptic();renderYT();return;}
+  if(action==='dis'){if(!S.ytDis.includes(track.id))S.ytDis.push(track.id);save2();const wasPlaying=ytQ[ytIdx]?.id===track.id;renderYT();if(wasPlaying){audio.pause();if(S.wave)ytNextAutomatic();else toast('Трек скрыт из рекомендаций');}return;}
+  ytPlay(ytQ.findIndex(item=>item.id===track.id));
 });
-$('ytGo').onclick = ytSearch;
-$('ytq').onkeydown = event => { if (event.key === 'Enter') ytSearch(); };$('ytLikes').onclick = () => {
-  ytQ = [...S.ytLiked].filter(ytTrackAllowed); ytIdx = -1; S.wave = false; save2(); updModes(); renderYT();
-};
+$('ytGo').onclick=ytSearch;$('ytq').onkeydown=event=>{if(event.key==='Enter')ytSearch();};
+$('ytLikes').onclick=()=>{ytQ=[...S.ytLiked].filter(ytTrackAllowed);ytIdx=-1;S.wave=false;save2();updModes();renderYT();};
 /* ---------- старт ---------- */
 (async function init() {
   const p = loadPrefs();
   Object.assign(S, { shuffle: !!p.shuffle, repeat: p.repeat || 0, rate: RATES.includes(p.rate) ? p.rate : 1, sort: p.sort || 'added', favOnly: !!p.favOnly });
-  load2(); paint(); setDrop(DROP_TXT); renderPl(); buildEq(); updModes(); renderYT();
+  load2(); sourceLoadSettings(); paint(); setDrop(DROP_TXT); renderPl(); buildEq(); updModes(); renderYT();
   try {
     db = await openDB();
     S.tracks = (await tx('readonly', s => s.getAll())).map(normalize);
